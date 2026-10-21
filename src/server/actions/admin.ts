@@ -1,0 +1,46 @@
+"use server";
+import "server-only";
+import { redirect } from "next/navigation";
+import { dataBackend } from "../env";
+import { loginWithDevPassword, loginWithSupabasePassword, logoutStaff } from "../auth";
+import type { AdminLoginState } from "./types";
+
+const DEFAULT_ADMIN_HOME = "/admin/leads";
+const LOGIN_PATH = "/admin/login";
+
+/** Only same-site /admin paths are allowed as a post-login destination (no open redirects). */
+function safeAdminPath(raw: FormDataEntryValue | null): string {
+  const p = typeof raw === "string" ? raw.trim() : "";
+  return /^\/admin(\/[A-Za-z0-9\-_/]*)?$/.test(p) && !p.includes("//") ? p : DEFAULT_ADMIN_HOME;
+}
+
+/**
+ * Staff sign-in. Use with `useActionState(adminLoginAction, { status: "idle" })`.
+ * Fixture mode (dev only): field `password` (checked against ADMIN_DEV_PASSWORD).
+ * Supabase mode: fields `email` and `password` (Supabase Auth + staff_profiles role).
+ * Optional field `next`: an /admin path to go to after sign-in. Redirects on success.
+ */
+export async function adminLoginAction(_prev: AdminLoginState, formData: FormData): Promise<AdminLoginState> {
+  const password = formData.get("password");
+  if (typeof password !== "string" || password.length === 0 || password.length > 512) {
+    return { status: "error", message: "Enter your password." };
+  }
+  let result;
+  if (dataBackend() === "supabase") {
+    const email = formData.get("email");
+    if (typeof email !== "string" || !/^[^\s@]+@[^\s@]+$/.test(email) || email.length > 254) {
+      return { status: "error", message: "Enter a valid email address." };
+    }
+    result = await loginWithSupabasePassword(email.trim(), password);
+  } else {
+    result = await loginWithDevPassword(password);
+  }
+  if (!result.ok) return { status: "error", message: result.message };
+  redirect(safeAdminPath(formData.get("next"))); // outside try/catch: redirect() throws by design
+}
+
+/** Signs out and redirects to the login page. Usable directly as `<form action={adminLogoutAction}>`. */
+export async function adminLogoutAction(): Promise<void> {
+  await logoutStaff();
+  redirect(LOGIN_PATH);
+}

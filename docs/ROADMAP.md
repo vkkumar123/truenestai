@@ -40,13 +40,15 @@ Journeys J1–J7 from `PRODUCT_SPEC.md`.
 - [ ] Supabase repositories pass the same contract tests as fixtures.
 - [ ] Staff login via Supabase Auth; dev credential path unused in supabase mode.
 - [ ] Service-role key server-only (bundle check in CI).
-- [ ] Carried from M1 review: advisor lead-assignment scoping (M3), Supabase session refresh in proxy (M6), dev-login throttle (L2), `is_published_project` RPC exposure (L9), Lane B matching under `lane=external` (N1), developer-name text search parity (N2), per-contact rate-limit keys (N3).
+- [ ] Carried from M1 review: advisor lead-assignment scoping (M3), Supabase session refresh in proxy (M6), dev-login throttle (L2), `is_published_project` RPC exposure (L9), Lane B matching under `lane=external` (N1), developer-name text search parity (N2), per-contact rate-limit keys (N3). N1–N3 done in M3.
+- [ ] Carried from M3 review: R1 expected-from check under lock, R2 completeness inside RPC, R3 auto-unpublish message flag, R4 publish-rule parity test + seed registry ids into `sources`.
+- [ ] Document upload to Storage with versioning (from M3).
 
-## M3 — Manual research tooling for staff
-- [ ] Admin forms to create or edit a project and add facts, each requiring ≥ 1 `SourceRef` (URL or document, observed date).
-- [ ] Verification workflow: `unverified → source_confirmed/reviewed/disputed/requires_professional_review`, with reviewer identity and timestamp (audit log).
-- [ ] Publish toggle gated on review; completeness score recomputed.
-- [ ] Document upload to Storage with versioning.
+## M3 — Manual research tooling for staff — **done 2026-10-21** (review PASS; Storage upload moved to M2)
+- [x] Admin forms to create or edit a project and add facts, each requiring ≥ 1 `SourceRef` (URL or document, observed date).
+- [x] Verification workflow: `unverified → source_confirmed/reviewed/disputed/requires_professional_review`, with reviewer identity and timestamp (audit log).
+- [x] Publish toggle gated on review; completeness score recomputed.
+- [ ] → M2: Document upload to Storage with versioning (needs Supabase Storage).
 
 ## M4 — First approved external source adapter — **owner: R5**
 - [ ] Source registry entry `approved` with documented access method and terms.

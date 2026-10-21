@@ -39,3 +39,13 @@ Verdict: **CHANGES REQUIRED** (0 critical, 1 high, 3 medium, 8 low).
 | M2 | med | Readiness check then publish is check-then-act | fix now: publish re-checks inside one transaction (RPC with row lock); fixture is single-threaded |
 | M3 | med | D13: advisor edits to published legal facts go live; advisor can clear a dispute | fix now: D13 revised (auto-unpublish when an edit makes a published project fail readiness; disputed→unverified admin-only); owner asked to confirm |
 | L1–L8 | low | free-text sourceId vs FK, automated-actor check is nominal, workaround runs pre-auth and in prod, lastCheckedAt bumped by publish/verify, malformed id 500, history hides actor id, Lane B match cap 50, developer reuse by name | L1, L3–L8 fix now; L2 documented (workers never hold a staff session) |
+
+## M3 — review round 2 (2026-10-21)
+Input: diff 258da35..HEAD; check 291, test:db 40/40, build, e2e 36/36 (observed by orchestrator from a clean `.next`).
+Verdict: **PASS**. H1, M1–M3, L1–L8 verified fixed or documented; D13 confirmed by owner.
+
+Carried to M2 (before Supabase goes live):
+- R1 (med): concurrent verification changes on the same fact can overwrite in Supabase; pass `p_expected_from` and compare under the lock.
+- R2 (low): completeness computed before the lock in `research_set_fact`; recompute inside the RPC or re-read after.
+- R3 (low): auto-unpublish message split on a sentence fragment in `action-feedback.tsx`; return flag and base message separately.
+- R4 (low): SQL/TS publish-blocker rule parity test; unauthenticated no-JS post skips dev workaround; seed registry ids into `sources`.

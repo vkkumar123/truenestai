@@ -39,7 +39,7 @@ Rules: UI talks to `src/server` services, never to Supabase directly for privile
 ## 3. Repository pattern
 - Interfaces (e.g. `ProjectRepository`, `ExternalListingRepository`, `LeadRepository`, `InfrastructureRepository`) return domain types.
 - **Fixture implementation (default):** in-memory, fictional `SAMPLE` data; used by dev, CI and e2e. Writes (leads) are held in memory per process.
-- **Supabase implementation:** selected by env (e.g. `DATA_MODE=supabase` plus Supabase vars; exact name owned by backend in `.env.example`).
+- **Supabase implementation:** selected by env (`DATA_BACKEND=supabase` plus Supabase vars; see `.env.example`).
 - Selection happens once in a server-only factory. Missing Supabase config in supabase mode fails loudly, with no silent fallback in production.
 
 ## 4. Access separation
@@ -47,7 +47,7 @@ Rules: UI talks to `src/server` services, never to Supabase directly for privile
 |---|---|---|
 | Public site | anonymous | Published Lane A + Lane B rows via anon key under RLS (read-only); lead insert via server action/API only |
 | Admin (`/admin`) | staff via Supabase Auth with role claim (`staff`, `admin`) | Server-side, RLS policies by role; service role not used for normal admin reads |
-| Admin in fixture mode | dev-only credential from env (`ADMIN_DEV_*`, **[Assumption]** on name) | **Disabled when `NODE_ENV=production`**: login rejected, route returns 404/401 |
+| Admin in fixture mode | dev-only credential from env (`ADMIN_DEV_PASSWORD` + `SESSION_SECRET`) | **Disabled when `NODE_ENV=production`**: login rejected, route returns 404/401 |
 | Workers | service role | Server/worker only; never in client bundles or logs |
 | Marketing controls | staff `admin` role | Draft-only: no spend APIs, no outbound send integrations wired |
 

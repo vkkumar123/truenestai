@@ -42,6 +42,18 @@ Format: context → decision → consequences. Status: `accepted` unless noted. 
 - **Decision:** `src/domain/types.ts` is the single contract, edited only by the orchestrator. Proposed changes are recorded here first.
 - **Consequences:** Stable interfaces between modules; changes are deliberate and visible.
 
+## D9 — Explicit regulatory searches in the contract — accepted (2026-10-21)
+- **Context:** "Searched and none found" must differ from "not yet checked" and from a negative finding.
+- **Decision:** `Project.regulatorySearches: RegulatorySearch[]` mirrors the `regulatory_searches` table. Buyer wording comes from `describeComplaintSearch` (never "no complaints").
+- **Consequences:** Replaces a magic-string stopgap in the backend.
+
+## D10 — No PostGIS in M1 — accepted (2026-10-21)
+- **Context:** The local test Postgres lacks PostGIS; M1 geospatial needs are radius/bbox on few rows.
+- **Decision:** `numeric` lat/lng + precision column; pure TS geo helpers in `src/locality/geo.ts`. Add a PostGIS migration with M6 (Supabase supports it).
+
+## D11 — Lead extras stay server-side — accepted (2026-10-21)
+- `consentedAt` and qualification live on the server `StoredLead` type and DB columns, not the shared `Lead` contract, until a client needs them.
+
 ## Proposed contract notes (not yet accepted)
 - P1: `Project.lane` and `ExternalListing.lane` are literal types, which is good for discriminated unions. Consider adding `published` or `hidden` to `ExternalListing` so staff can suppress a listing without deleting it (M4).
 - P2: Consider a `Disclosure` type (commercial relationship per project or developer) for M8.

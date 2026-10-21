@@ -41,6 +41,9 @@ async function seed(c: Client) {
       ('f-hidden', 'sample-feed', 'https://example.com/h', now());
     insert into regulatory_records (project_id, kind, summary, status_status, status_value, source_id, observed_at) values
       ('p-hidden', 'complaint', 'SAMPLE complaint', 'known', 'pending', 'sample-feed', now());
+    insert into regulatory_searches (project_id, kind, source_id, url, searched_at, results_found) values
+      ('p-pub', 'complaint', 'sample-feed', 'https://example.com/s', now(), 0),
+      ('p-hidden', 'complaint', 'sample-feed', 'https://example.com/s2', now(), 1);
     insert into project_documents (project_id, document_key, title, kind, source_id, observed_at, storage_path) values
       ('p-pub', 'brochure', 'SAMPLE brochure', 'brochure', 'sample-feed', now(), 'private/x.pdf');
     insert into external_listings (id, source_id, source_record_id, canonical_url, title, limitations, is_sample) values
@@ -97,11 +100,13 @@ d("migrations + RLS", () => {
         facts: (await q.query("select id from facts order by id")).rows.map((x) => x.id),
         factSources: (await q.query("select fact_id from fact_sources")).rows.map((x) => x.fact_id),
         reg: (await q.query("select id from regulatory_records")).rows,
+        searches: (await q.query("select project_id, results_found from regulatory_searches")).rows,
         devs: (await q.query("select id from developers")).rows.map((x) => x.id),
       }));
       expect(r.facts).toEqual(["f-pub", "f-pub-unknown"]);
       expect(r.factSources).toEqual(["f-pub"]);
       expect(r.reg).toEqual([]);
+      expect(r.searches).toEqual([{ project_id: "p-pub", results_found: 0 }]);
       expect(r.devs).toEqual(["dev-a"]);
     });
 

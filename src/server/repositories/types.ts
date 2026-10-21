@@ -2,13 +2,6 @@ import "server-only";
 import type { ConstructionStatus, ExternalListing, Lead, LeadStatus, Project } from "@/domain/types";
 import type { LeadQualification } from "@/leads/qualification";
 
-/**
- * Convention (pending a contract change in src/domain/types.ts): a RegulatoryRecord whose
- * status.value equals this marks a search that was performed and found nothing. It is never
- * shown as "clean"; a project with no record of a kind at all means "not searched" (unknown).
- */
-export const NONE_FOUND_STATUS = "none_found_in_searched_source";
-
 export interface ProjectFilter {
   localityId?: string;
   text?: string; // case-insensitive match on project name, developer name or slug

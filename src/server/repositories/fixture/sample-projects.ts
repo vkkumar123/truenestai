@@ -7,12 +7,12 @@ import type {
   Project,
   ProjectDocument,
   RegulatoryRecord,
+  RegulatorySearch,
   SourceRef,
   UnitConfiguration,
   VerificationState,
 } from "@/domain/types";
 import { getLocality } from "@/config/markets";
-import { NONE_FOUND_STATUS } from "../types";
 
 // OBVIOUSLY FICTIONAL sample data for local development and tests. Not real projects,
 // developers, RERA numbers, documents or URLs. Every record has isSample: true.
@@ -66,6 +66,10 @@ function reraRecord(id: string, slug: string, reference: string): RegulatoryReco
   };
 }
 
+function search(slug: string, kind: RegulatorySearch["kind"], resultsFound: number): RegulatorySearch {
+  return { kind, sourceId: SOURCE_ID, url: `https://example.com/sample/${slug}/${kind}-search`, searchedAt: OBSERVED, resultsFound };
+}
+
 function doc(id: string, slug: string, title: string, kind: ProjectDocument["kind"], version = 1, documentDate: string | null = null): ProjectDocument {
   return { id, title, kind, version, documentDate, source: src(`${slug}/docs/${id}`, { documentDate }) };
 }
@@ -83,6 +87,7 @@ interface Spec {
   address: string | null;
   units: UnitConfiguration[];
   regulatoryRecords?: RegulatoryRecord[];
+  regulatorySearches?: RegulatorySearch[];
   documents?: ProjectDocument[];
   reviewFlags?: string[];
   published?: boolean;
@@ -115,6 +120,7 @@ function build(s: Spec): Project {
     location: centroid(s.localityId),
     ...base,
     regulatoryRecords: s.regulatoryRecords ?? [],
+    regulatorySearches: s.regulatorySearches ?? [], // none = "not yet checked"
     documents: s.documents ?? [],
     reviewFlags: s.reviewFlags ?? [],
     completeness: completeness(base),
@@ -150,6 +156,7 @@ export const SAMPLE_PROJECTS: readonly Project[] = [
         verification: "unverified",
       },
     ],
+    regulatorySearches: [search("sample-lakeview-residences", "complaint", 1)],
     documents: [
       doc("sample-doc-lakeview-brochure-v2", "sample-lakeview-residences", "SAMPLE Brochure", "brochure", 2, "2026-07-01"),
       doc("sample-doc-lakeview-rera-cert", "sample-lakeview-residences", "SAMPLE RERA certificate", "rera_certificate", 1, "2025-03-10"),
@@ -167,21 +174,10 @@ export const SAMPLE_PROJECTS: readonly Project[] = [
     possession: "2026-06 (as declared in SAMPLE registration)",
     address: "SAMPLE Avenue 2, Hebbal (fictional)",
     units: [unit("3 BHK", "sample-northwind-heights", [1400, 1550], [15000000, 17500000])],
-    // A search WAS performed and found nothing. Shown as "none found in <source> on <date>",
-    // never as "no complaints" / "clean". Contrast with Orchard Greens (never searched = unknown).
-    regulatoryRecords: [
-      reraRecord("sample-reg-northwind-rera", "sample-northwind-heights", "SAMPLE-RERA-0002"),
-      {
-        id: "sample-reg-northwind-complaint-search",
-        kind: "complaint",
-        reference: null,
-        summary:
-          "No complaints were found in the SAMPLE source search on the observed date. This is not proof that none exist.",
-        status: known(NONE_FOUND_STATUS, [src("sample-northwind-heights/complaints")]),
-        source: src("sample-northwind-heights/complaints"),
-        verification: "unverified",
-      },
-    ],
+    // A complaint search WAS performed and found nothing: shown as "none found in <source> as of
+    // <date>", never "no complaints". Contrast with Orchard Greens (no search = not yet checked).
+    regulatoryRecords: [reraRecord("sample-reg-northwind-rera", "sample-northwind-heights", "SAMPLE-RERA-0002")],
+    regulatorySearches: [search("sample-northwind-heights", "complaint", 0)],
     documents: [doc("sample-doc-northwind-plan", "sample-northwind-heights", "SAMPLE Floor plan", "plan", 1, "2025-11-02")],
     reviewFlags: [TITLE_FLAG],
   }),

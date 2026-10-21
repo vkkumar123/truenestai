@@ -186,6 +186,7 @@ create table public.regulatory_searches (
   project_id text not null references public.projects(id) on delete cascade,
   kind text not null check (kind in ('rera_registration','complaint','order','extension','other_disclosure')),
   source_id text not null references public.sources(id),
+  url text,
   searched_at timestamptz not null,
   results_found integer not null check (results_found >= 0),
   note text

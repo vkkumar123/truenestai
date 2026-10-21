@@ -5,7 +5,6 @@ import { createSupabaseRepositories } from "./supabase";
 import type { Repositories } from "./types";
 
 export type * from "./types";
-export { NONE_FOUND_STATUS } from "./types";
 
 // Kept on globalThis so the dev fixture lead store survives hot reloads in one process.
 const KEY = Symbol.for("truenest.repositories");

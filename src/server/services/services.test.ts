@@ -58,6 +58,10 @@ describe("fixture data", () => {
     const locs = new Set(SAMPLE_PROJECTS.filter((p) => p.published).map((p) => p.localityId));
     for (const id of ["hebbal", "yelahanka", "devanahalli", "thanisandra", "hennur", "jakkur"]) expect(locs.has(id)).toBe(true);
     expect(SAMPLE_PROJECTS.some((p) => p.reraNumbers.status === "unknown")).toBe(true);
+    const complaintSearches = (id: string) => SAMPLE_PROJECTS.find((p) => p.id === id)!.regulatorySearches.filter((s) => s.kind === "complaint");
+    expect(complaintSearches("sample-proj-lakeview").map((s) => s.resultsFound)).toEqual([1]);
+    expect(complaintSearches("sample-proj-northwind").map((s) => s.resultsFound)).toEqual([0]);
+    expect(complaintSearches("sample-proj-orchard")).toEqual([]);
   });
 });
 
@@ -164,9 +168,9 @@ describe("getComparison", () => {
     expect(rera.cells[0]).toMatchObject({ status: "known", value: "SAMPLE-RERA-0001", verification: "unverified" });
     expect(rera.cells[1]).toMatchObject({ status: "unknown", value: null });
     const complaints = r.rows.find((x) => x.key === "complaints")!;
-    expect(complaints.cells[0]).toMatchObject({ status: "known", value: expect.stringMatching(/^1 listed/) });
-    expect(complaints.cells[1]).toMatchObject({ status: "unknown" }); // never searched
-    expect(complaints.cells[2]).toMatchObject({ status: "known", value: expect.stringMatching(/None found .*not proof/) });
+    expect(complaints.cells[0]).toMatchObject({ status: "known", value: expect.stringMatching(/^1 complaint record found as of 2026-10-01 in sample-feed/) });
+    expect(complaints.cells[1]).toMatchObject({ status: "unknown", value: null, note: "Complaint records not yet checked." });
+    expect(complaints.cells[2]).toMatchObject({ status: "known", value: expect.stringMatching(/^No complaint found as of 2026-10-01 in sample-feed\. .*does not confirm the absence/) });
   });
 });
 

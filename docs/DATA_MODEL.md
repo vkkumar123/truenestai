@@ -49,10 +49,9 @@ Regulatory records and documents carry the same provenance inline (`source_id`, 
 
 ## Unknown is not negative
 - `status = 'unknown'` ⇒ `value is null` (enforced by CHECK). It means "not found yet" and is shown as such.
-- No regulatory record of a kind ⇒ **not searched** (unknown).
-- A search that found nothing is recorded explicitly (`regulatory_searches.results_found = 0`; in the domain
-  contract today, a `RegulatoryRecord` whose `status.value` is `none_found_in_searched_source`). It is shown as
-  "none found in <source> on <date> — not proof that none exist", never as "clean".
+- Every search performed is recorded (`regulatory_searches` ↔ `Project.regulatorySearches`). `results_found = 0`
+  is shown as "No complaint found as of <date> in <source>" with a scope caveat (`describeComplaintSearch`,
+  src/research/evidence.ts), never as "clean". No search of a kind = "Not yet checked".
 - RERA registration is not title clearance. Title/legal items go in `review_flags` / `requires_professional_review`.
 
 ## Verification states

@@ -73,6 +73,16 @@ export interface RegulatoryRecord {
   verification: VerificationState;
 }
 
+// A search we performed. resultsFound = 0 means "none found in these sources on this date",
+// never "none exist". No RegulatorySearch for a kind means "not yet checked".
+export interface RegulatorySearch {
+  kind: RegulatoryRecord["kind"];
+  sourceId: string;
+  url: string | null;
+  searchedAt: string;
+  resultsFound: number;
+}
+
 export interface ProjectDocument {
   id: string;
   title: string;
@@ -102,6 +112,7 @@ export interface Project {
   declaredPossession: FactValue<string>; // as declared by developer/RERA, not a promise
   units: UnitConfiguration[];
   regulatoryRecords: RegulatoryRecord[];
+  regulatorySearches: RegulatorySearch[];
   documents: ProjectDocument[];
   reviewFlags: string[]; // items requiring qualified professional review
   completeness: number; // 0..1, computed from fact coverage

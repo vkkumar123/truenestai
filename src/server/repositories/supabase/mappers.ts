@@ -7,6 +7,7 @@ import type {
   Project,
   ProjectDocument,
   RegulatoryRecord,
+  RegulatorySearch,
   SourceRef,
   UnitConfiguration,
   VerificationState,
@@ -47,6 +48,13 @@ export interface RegulatoryRow {
   document_date: string | null;
   verification: VerificationState;
 }
+export interface RegulatorySearchRow {
+  kind: RegulatorySearch["kind"];
+  source_id: string;
+  url: string | null;
+  searched_at: string;
+  results_found: number;
+}
 export interface DocumentRow {
   id: string;
   title: string;
@@ -74,6 +82,7 @@ export interface ProjectRow {
   units: { id: string; label: string; sort_order: number }[] | null;
   facts: FactRow[] | null;
   regulatory_records: RegulatoryRow[] | null;
+  regulatory_searches: RegulatorySearchRow[] | null;
   project_documents: DocumentRow[] | null;
 }
 
@@ -84,6 +93,7 @@ export const PROJECT_SELECT = [
   "units:project_units(id, label, sort_order)",
   "facts(id, unit_id, field, value, status, verification, is_current, fact_sources(source_id, url, observed_at, document_date, note))",
   "regulatory_records(id, kind, reference, summary, status_status, status_value, status_verification, source_id, source_url, observed_at, document_date, verification)",
+  "regulatory_searches(kind, source_id, url, searched_at, results_found)",
   "project_documents(id, title, kind, version, document_date, source_id, source_url, observed_at)",
 ].join(", ");
 
@@ -155,6 +165,13 @@ export function mapProjectRow(row: ProjectRow): Project {
     declaredPossession: toFact<string>(projectFact("declared_possession")),
     units,
     regulatoryRecords,
+    regulatorySearches: (row.regulatory_searches ?? []).map((s) => ({
+      kind: s.kind,
+      sourceId: s.source_id,
+      url: s.url,
+      searchedAt: s.searched_at,
+      resultsFound: s.results_found,
+    })),
     documents,
     reviewFlags: row.review_flags ?? [],
     completeness: toNum(row.completeness),

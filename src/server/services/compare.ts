@@ -1,8 +1,9 @@
 import "server-only";
 import { z } from "zod";
-import type { FactValue, Project, SourceRef, VerificationState } from "@/domain/types";
+import type { FactValue, Project, RegulatorySearch, SourceRef, VerificationState } from "@/domain/types";
 import { getLocality } from "@/config/markets";
-import { getRepositories, NONE_FOUND_STATUS, type Repositories } from "../repositories";
+import { describeComplaintSearch } from "@/research/evidence";
+import { getRepositories, type Repositories } from "../repositories";
 
 export const MAX_COMPARE = 4;
 
@@ -13,6 +14,8 @@ export interface ComparisonCell {
   value: string | null;
   verification: VerificationState | null; // null for structural fields (name, locality)
   sources: SourceRef[];
+  /** Buyer-facing wording when the row needs more than `value` (e.g. "Not yet checked"). */
+  note?: string;
 }
 
 export interface ComparisonRow {
@@ -58,17 +61,45 @@ function unitRange(p: Project, pick: "priceInr" | "carpetAreaSqft", fmt: (n: num
   };
 }
 
+/**
+ * Complaints row from records + searches:
+ *  - complaint search(es) recorded → "N found" / "None found in <source> as of <date>" (scoped caveat)
+ *  - no search, but complaint records exist → "N found" (as of the records' observation date)
+ *  - neither → status unknown, "Not yet checked" (never a negative finding)
+ * Uses the latest search per source; the count is the larger of searched results and listed records.
+ */
 function complaintsCell(p: Project): ComparisonCell {
-  const recs = p.regulatoryRecords.filter((r) => r.kind === "complaint");
-  if (!recs.length) {
-    return { projectId: p.id, status: "unknown", value: null, verification: "unverified", sources: [] }; // not searched
+  const records = p.regulatoryRecords.filter((r) => r.kind === "complaint");
+  const latestBySource = new Map<string, RegulatorySearch>();
+  for (const s of p.regulatorySearches.filter((x) => x.kind === "complaint")) {
+    const prev = latestBySource.get(s.sourceId);
+    if (!prev || prev.searchedAt < s.searchedAt) latestBySource.set(s.sourceId, s);
   }
-  const listed = recs.filter((r) => r.status.value !== NONE_FOUND_STATUS);
-  const value = listed.length
-    ? `${listed.length} listed (outcome as shown by source)`
-    : "None found in the searched source on the observed date (not proof that none exist)";
-  const weakest = recs.some((r) => r.verification === "unverified") ? "unverified" : recs[0].verification;
-  return { projectId: p.id, status: "known", value, verification: weakest, sources: recs.map((r) => r.source) };
+  const searches = [...latestBySource.values()];
+  if (!searches.length && !records.length) {
+    return {
+      projectId: p.id,
+      status: "unknown",
+      value: null,
+      verification: null,
+      sources: [],
+      note: describeComplaintSearch({ sourcesChecked: [], found: 0, checkedAt: "" }),
+    };
+  }
+  const searchRefs: SourceRef[] = searches.map((s) => ({ sourceId: s.sourceId, url: s.url, observedAt: s.searchedAt }));
+  const recordRefs = records.map((r) => r.source);
+  const sourcesChecked = searches.length ? searchRefs : recordRefs;
+  const checkedAt = sourcesChecked.map((s) => s.observedAt).sort().at(-1)!;
+  const found = Math.max(records.length, searches.reduce((n, s) => n + s.resultsFound, 0));
+  const text = describeComplaintSearch({ sourcesChecked, found, checkedAt });
+  return {
+    projectId: p.id,
+    status: "known",
+    value: text,
+    verification: records.length && records.every((r) => r.verification !== "unverified") ? records[0].verification : "unverified",
+    sources: [...searchRefs, ...recordRefs],
+    note: text,
+  };
 }
 
 const ROWS: { key: string; label: string; cell: (p: Project) => ComparisonCell }[] = [

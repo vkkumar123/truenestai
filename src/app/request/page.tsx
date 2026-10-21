@@ -1,11 +1,8 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { Suspense } from "react";
 import type { LeadRequestType } from "@/domain/types";
-import { getLocality } from "@/config/markets";
-import { getSource } from "@/discovery/registry";
 import { BUDGET_BANDS } from "@/leads/validation";
-import { getRepositories } from "@/server/repositories";
+import { getRequestSubject } from "@/server/services/projects";
 import { Alert, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { LeadForm } from "@/components/lead/lead-form";
@@ -16,8 +13,6 @@ export const metadata: Metadata = {
   title: "Request verification or buyer assistance",
   description: "Ask TrueNest to verify a property or help with your search. Your details are used only to respond.",
 };
-
-const ID = /^[A-Za-z0-9_-]{1,100}$/;
 
 function first(v: string | string[] | undefined): string {
   return (Array.isArray(v) ? v[0] : v)?.trim() ?? "";
@@ -51,39 +46,32 @@ async function RequestContent({ searchParams }: { searchParams: PageProps<"/requ
   const typeParam = first(sp.type);
   const from = first(sp.from);
 
-  const repos = getRepositories();
-  // A request refers to at most one property; a project reference wins over a listing.
-  const projectId = ID.test(projectParam) ? projectParam : null;
-  const listingId = !projectId && ID.test(listingParam) ? listingParam : null;
-  const [project] = projectId ? (await repos.projects.getProjectsByIds([projectId])).filter((p) => p.published) : [];
-  const listing = listingId ? await repos.externalListings.getById(listingId) : null;
-  const missing = (projectId && !project) || (listingId && !listing);
+  // A request refers to at most one property; the service lets a project reference win.
+  const subject =
+    projectParam || listingParam
+      ? await getRequestSubject({ projectId: projectParam || null, externalListingId: projectParam ? null : listingParam || null })
+      : null;
+  const missing = (projectParam || listingParam) && !subject;
+  const isListing = subject?.kind === "external_listing";
 
   const defaultRequestType: LeadRequestType =
-    typeParam === "verification" || typeParam === "buyer_assistance" ? typeParam : listing ? "verification" : "buyer_assistance";
+    typeParam === "verification" || typeParam === "buyer_assistance" ? typeParam : isListing ? "verification" : "buyer_assistance";
   const landingPath = from.startsWith("/") && !from.startsWith("//") && from.length <= 300 ? from : "/request";
 
   return (
     <div className="space-y-6">
-      {project ? (
+      {subject ? (
         <Alert tone="info">
-          <AlertTitle>About this project</AlertTitle>
-          <p>
-            <Link href={`/projects/${project.slug}`}>{project.name}</Link> · {project.developer.name} ·{" "}
-            {getLocality(project.localityId)?.name ?? project.localityId}{" "}
-            {project.isSample ? <Badge tone="warning">Sample data</Badge> : null}
+          <AlertTitle>{isListing ? "About this listing" : "About this project"}</AlertTitle>
+          <p className="flex flex-wrap items-center gap-1.5">
+            <span className="font-medium">{subject.name}</span>
+            {isListing ? (
+              <Badge className="border-external/40 bg-external/10 text-external">{EXTERNAL_LABEL}</Badge>
+            ) : (
+              <Badge tone="info">Researched by TrueNest</Badge>
+            )}
+            {subject.isSample ? <Badge tone="warning">Sample data</Badge> : null}
           </p>
-        </Alert>
-      ) : null}
-      {listing ? (
-        <Alert tone="info">
-          <AlertTitle>About this listing</AlertTitle>
-          <p className="space-x-1">
-            <span className="font-medium">{listing.title}</span>
-            <Badge className="border-external/40 bg-external/10 text-external">{EXTERNAL_LABEL}</Badge>
-            {listing.isSample ? <Badge tone="warning">Sample data</Badge> : null}
-          </p>
-          <p className="text-muted-foreground">Source: {getSource(listing.sourceId)?.name ?? listing.sourceId}</p>
         </Alert>
       ) : null}
       {missing ? (
@@ -95,8 +83,8 @@ async function RequestContent({ searchParams }: { searchParams: PageProps<"/requ
 
       <LeadForm
         defaultRequestType={defaultRequestType}
-        projectId={project?.id ?? null}
-        externalListingId={listing?.id ?? null}
+        projectId={subject?.kind === "project" ? subject.id : null}
+        externalListingId={isListing ? subject.id : null}
         landingPath={landingPath}
         utm={{ utmSource: attr(first(sp.utm_source)), utmMedium: attr(first(sp.utm_medium)), utmCampaign: attr(first(sp.utm_campaign)) }}
         budgetBands={BUDGET_BANDS.map((b) => ({ value: b, label: BUDGET_BAND_LABEL[b] ?? b }))}

@@ -6,7 +6,7 @@ import { AlertTriangle, ExternalLink, FileText, Scale } from "lucide-react";
 import type { Project, RegulatoryRecord, RegulatorySearch } from "@/domain/types";
 import { getLocality } from "@/config/markets";
 import { describeComplaintSearch, COMPLAINT_SCOPE_CAVEAT, REVIEW_FLAG_TEXT, reviewFlagsFor } from "@/research/evidence";
-import { getRepositories } from "@/server/repositories";
+import { getPublishedProject } from "@/server/services/projects";
 import { Alert, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
@@ -28,12 +28,6 @@ export const metadata: Metadata = {
   title: "Project evidence",
   description: "Facts, sources, regulatory records and documents for a researched project.",
 };
-
-async function getPublishedProject(slug: string): Promise<Project | null> {
-  if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(slug) || slug.length > 120) return null;
-  const p = await getRepositories().projects.getProjectBySlug(slug);
-  return p && p.published === true ? p : null;
-}
 
 export default async function ProjectPage({ params }: PageProps<"/projects/[slug]">) {
   const { slug } = await params;

@@ -26,6 +26,7 @@ const { FixedWindowRateLimiter } = await import("@/server/services/rate-limit");
 const auth = await import("@/server/auth");
 const { signSessionToken } = await import("@/server/session-token");
 const research = await import("@/server/services/research");
+const { factVersion } = await import("@/research/verification");
 const { setRepositoriesForTesting } = await import("@/server/repositories");
 const { submitLeadAction } = await import("@/server/actions/leads");
 const { clientIpFromForwardedFor } = await import("@/server/client-ip");
@@ -268,7 +269,7 @@ type Role = "admin" | "advisor";
 const staffAs = (role: Role, userId = `staff-${role}`) => async () =>
   ({ userId, role, mode: "fixture" as const, expiresAt: null });
 const OBSERVED = "2026-10-01T00:00:00.000Z";
-const SOURCE = { sourceId: "sample-research-source", url: "https://example.com/sample/research", observedAt: OBSERVED };
+const SOURCE = { sourceId: "sample-feed", url: "https://example.com/sample/research", observedAt: OBSERVED };
 
 async function newProject(repos: ReturnType<typeof createFixtureRepositories>, name = "SAMPLE M3 Test Residency") {
   const r = await research.createProject(
@@ -292,6 +293,14 @@ async function setFacts(repos: ReturnType<typeof createFixtureRepositories>, pro
   }
 }
 
+/** changeVerification with the fact version the caller would have seen on the staff page. */
+async function verify(projectId: string, field: string, to: string, note: string | null, deps: Parameters<typeof research.changeVerification>[1]) {
+  const project = await deps!.repos!.research.getProjectByIdForStaff(projectId);
+  const fact = project ? (project[field as "address"] as Parameters<typeof factVersion>[0]) : null;
+  const expectedVersion = fact ? factVersion(fact) : "v1-missing";
+  return research.changeVerification({ projectId, field, to, expectedVersion, note }, deps);
+}
+
 const discoverNone = async () => ({ listings: [], errors: [] });
 const publicNames = async (repos: ReturnType<typeof createFixtureRepositories>, text: string) =>
   (await searchProperties({ text, lane: "researched" }, { repos, discover: discoverNone, minResearched: 0 })).researched.map((p) => p.name);
@@ -303,16 +312,16 @@ describe("M3: role and actor rules for research changes", () => {
     await setFacts(repos, p.id, "advisor");
     const advisor = { repos, requireStaff: staffAs("advisor") };
     for (const to of ["source_confirmed", "reviewed"]) {
-      const r = await research.changeVerification(p.id, "reraNumbers", to, null, advisor);
+      const r = await verify(p.id, "reraNumbers", to, null, advisor);
       expect(r).toMatchObject({ ok: false, error: "forbidden" });
     }
     expect(await research.setPublished(p.id, true, advisor)).toMatchObject({ ok: false, error: "forbidden" });
     // Even a fully ready project cannot be published by an advisor.
-    await research.changeVerification(p.id, "reraNumbers", "reviewed", null, { repos, requireStaff: staffAs("admin") });
+    await verify(p.id, "reraNumbers", "reviewed", null, { repos, requireStaff: staffAs("admin") });
     expect(await research.setPublished(p.id, true, advisor)).toMatchObject({ ok: false, error: "forbidden" });
     expect((await repos.research.getProjectByIdForStaff(p.id))!.published).toBe(false);
     // Advisors may still flag problems.
-    expect((await research.changeVerification(p.id, "address", "disputed", "SAMPLE note", advisor)).ok).toBe(true);
+    expect((await verify(p.id, "address", "disputed", "SAMPLE note", advisor)).ok).toBe(true);
   });
 
   it("automated actors ('ai', 'system') are refused for every write, even with the admin role", async () => {
@@ -323,7 +332,7 @@ describe("M3: role and actor rules for research changes", () => {
       const deps = { repos, requireStaff: staffAs("admin", id) };
       expect(await research.createProject({ name: "SAMPLE Bot Project", developerName: "SAMPLE Dev", localityId: "hebbal" }, deps)).toMatchObject({ ok: false, error: "forbidden" });
       expect(await research.updateFact({ projectId: p.id, field: "address", status: "known", value: "SAMPLE Bot Road (fictional)", sources: [SOURCE] }, deps)).toMatchObject({ ok: false, error: "forbidden" });
-      expect(await research.changeVerification(p.id, "reraNumbers", "reviewed", null, deps)).toMatchObject({ ok: false, error: "forbidden" });
+      expect(await verify(p.id, "reraNumbers", "reviewed", null, deps)).toMatchObject({ ok: false, error: "forbidden" });
       expect(await research.setPublished(p.id, true, deps)).toMatchObject({ ok: false, error: "forbidden" });
     }
     const audit = await repos.research.listAudit(p.id);
@@ -351,11 +360,11 @@ describe("M3: publish readiness and verification lifecycle", () => {
     expect(unverified).toMatchObject({ ok: false, error: "not_ready" });
     if (!unverified.ok) expect(unverified.errors).toContain("reraNumbers: must be source_confirmed or reviewed");
 
-    expect((await research.changeVerification(p.id, "reraNumbers", "reviewed", null, admin)).ok).toBe(true);
+    expect((await verify(p.id, "reraNumbers", "reviewed", null, admin)).ok).toBe(true);
     // A disputed fact blocks again.
-    await research.changeVerification(p.id, "address", "disputed", null, admin);
+    await verify(p.id, "address", "disputed", null, admin);
     expect(await research.setPublished(p.id, true, admin)).toMatchObject({ ok: false, error: "not_ready" });
-    await research.changeVerification(p.id, "address", "unverified", null, admin);
+    await verify(p.id, "address", "unverified", null, admin);
     expect(await research.setPublished(p.id, true, admin)).toMatchObject({ ok: true, changed: true });
   });
 
@@ -364,7 +373,7 @@ describe("M3: publish readiness and verification lifecycle", () => {
     const admin = { repos, requireStaff: staffAs("admin", "staff-admin-1") };
     const p = await newProject(repos);
     await setFacts(repos, p.id);
-    await research.changeVerification(p.id, "reraNumbers", "reviewed", "SAMPLE checked", admin);
+    await verify(p.id, "reraNumbers", "reviewed", "SAMPLE checked", admin);
     expect((await repos.research.getProjectByIdForStaff(p.id))!.reraNumbers.verification).toBe("reviewed");
 
     const edit = await research.updateFact(
@@ -408,7 +417,7 @@ describe("M3: staff-created projects and public visibility", () => {
     const p = await newProject(repos, "SAMPLE Visibility Check Towers");
     expect(p.published).toBe(false);
     await setFacts(repos, p.id);
-    await research.changeVerification(p.id, "reraNumbers", "reviewed", null, admin);
+    await verify(p.id, "reraNumbers", "reviewed", null, admin);
 
     expect(await publicNames(repos, "Visibility Check")).toEqual([]);
     expect(await repos.projects.getProjectBySlug(p.slug)).toBeNull();
@@ -488,5 +497,111 @@ describe("rate-limit key ignores spoofed X-Forwarded-For entries (TRUSTED_PROXY_
       delete (globalThis as Record<symbol, unknown>)[Symbol.for("truenest.leadRateLimiter")];
       setRepositoriesForTesting(undefined);
     }
+  });
+});
+
+describe("M3 review fixes: versions, resets, auto-unpublish, source registry", () => {
+  async function readyProject(name: string) {
+    const repos = createFixtureRepositories();
+    const admin = { repos, requireStaff: staffAs("admin") };
+    const p = await newProject(repos, name);
+    await setFacts(repos, p.id);
+    expect((await verify(p.id, "reraNumbers", "reviewed", null, admin)).ok).toBe(true);
+    return { repos, admin, p };
+  }
+  const staffFact = async (repos: ReturnType<typeof createFixtureRepositories>, id: string, field: "address" | "reraNumbers") =>
+    (await repos.research.getProjectByIdForStaff(id))![field];
+
+  it("a stale expectedVersion is refused with 'conflict' and changes nothing", async () => {
+    const repos = createFixtureRepositories();
+    const admin = { repos, requireStaff: staffAs("admin") };
+    const p = await newProject(repos);
+    await setFacts(repos, p.id);
+    const view = await research.getStaffProjectView(p.id, admin);
+    if (!view.ok) throw new Error("view failed");
+    const seen = view.factVersions.reraNumbers;
+    expect(seen).toBe(factVersion(view.project.reraNumbers));
+
+    // Someone else edits the fact after the reviewer loaded the page.
+    await research.updateFact({ projectId: p.id, field: "reraNumbers", status: "known", value: ["SAMPLE-RERA-0779"], sources: [SOURCE] }, admin);
+    const auditBefore = await repos.research.listAudit(p.id);
+
+    for (const expectedVersion of [seen, "v1-00000000-0", "garbage"]) {
+      const r = await research.changeVerification({ projectId: p.id, field: "reraNumbers", to: "reviewed", expectedVersion }, admin);
+      expect(r).toMatchObject({ ok: false, error: "conflict" });
+    }
+    expect(await staffFact(repos, p.id, "reraNumbers")).toMatchObject({ value: ["SAMPLE-RERA-0779"], verification: "unverified" });
+    expect(await repos.research.listAudit(p.id)).toEqual(auditBefore);
+    // A missing version is a validation error, not a silent apply.
+    expect(await research.changeVerification({ projectId: p.id, field: "reraNumbers", to: "reviewed", expectedVersion: "" }, admin)).toMatchObject({
+      ok: false,
+      error: "validation",
+    });
+  });
+
+  it("an advisor cannot reset disputed -> unverified (admin can)", async () => {
+    const repos = createFixtureRepositories();
+    const advisor = { repos, requireStaff: staffAs("advisor") };
+    const admin = { repos, requireStaff: staffAs("admin") };
+    const p = await newProject(repos);
+    await setFacts(repos, p.id);
+    expect((await verify(p.id, "address", "disputed", "SAMPLE concern", advisor)).ok).toBe(true);
+    expect(await verify(p.id, "address", "unverified", null, advisor)).toMatchObject({ ok: false, error: "forbidden" });
+    expect((await staffFact(repos, p.id, "address")).verification).toBe("disputed");
+    expect((await verify(p.id, "address", "unverified", null, admin)).ok).toBe(true);
+  });
+
+  it("a RERA edit on a published project auto-unpublishes it (audited); an address edit keeps it live", async () => {
+    const { repos, admin, p } = await readyProject("SAMPLE Auto Unpublish Heights");
+    expect((await research.setPublished(p.id, true, admin)).ok).toBe(true);
+
+    const addr = await research.updateFact(
+      { projectId: p.id, field: "address", status: "known", value: "SAMPLE Corrected Road 10, Hebbal (fictional)", sources: [SOURCE] },
+      admin,
+    );
+    expect(addr).toMatchObject({ ok: true, autoUnpublished: false });
+    expect((await repos.research.getProjectByIdForStaff(p.id))!.published).toBe(true);
+    expect(await publicNames(repos, "Auto Unpublish")).toEqual(["SAMPLE Auto Unpublish Heights"]);
+
+    const rera = await research.updateFact(
+      { projectId: p.id, field: "reraNumbers", status: "known", value: ["SAMPLE-RERA-0780"], sources: [SOURCE] },
+      { repos, requireStaff: staffAs("advisor") },
+    );
+    expect(rera).toMatchObject({ ok: true, autoUnpublished: true });
+    expect((await repos.research.getProjectByIdForStaff(p.id))!.published).toBe(false);
+    expect(await publicNames(repos, "Auto Unpublish")).toEqual([]);
+    expect(await repos.projects.getProjectBySlug(p.slug)).toBeNull();
+    const last = (await repos.research.listAudit(p.id)).at(-1);
+    expect(last).toMatchObject({ field: "published", action: "unpublished", note: "auto: failed readiness after edit" });
+  });
+
+  it("a fact citing a source id not in the registry is rejected and changes nothing", async () => {
+    const repos = createFixtureRepositories();
+    const admin = { repos, requireStaff: staffAs("admin") };
+    const p = await newProject(repos);
+    for (const sourceId of ["sample-research-source", "not-a-source", "SAMPLE-FEED-TYPO"]) {
+      const r = await research.updateFact(
+        { projectId: p.id, field: "address", status: "known", value: "SAMPLE Road 11 (fictional)", sources: [{ ...SOURCE, sourceId }] },
+        admin,
+      );
+      expect(r).toMatchObject({ ok: false, error: "validation" });
+      if (!r.ok) expect(r.errors?.join(" ")).toMatch(/Unknown source/);
+    }
+    // FormData-style input is checked too.
+    const fd = new FormData();
+    for (const [k, v] of Object.entries({ projectId: p.id, field: "address", status: "known", value: "SAMPLE Road 12 (fictional)" })) fd.set(k, v);
+    fd.set("sources[0].sourceId", "not-a-source");
+    fd.set("sources[0].url", SOURCE.url);
+    fd.set("sources[0].observedAt", OBSERVED);
+    expect(await research.updateFact(fd, admin)).toMatchObject({ ok: false, error: "validation" });
+    // Fixture sources are not citable in production.
+    vi.stubEnv("NODE_ENV", "production");
+    expect(await research.updateFact({ projectId: p.id, field: "address", status: "known", value: "SAMPLE Road 13 (fictional)", sources: [SOURCE] }, admin)).toMatchObject({
+      ok: false,
+      error: "validation",
+    });
+    vi.stubEnv("NODE_ENV", "test");
+    expect((await staffFact(repos, p.id, "address")).status).toBe("unknown");
+    expect((await repos.research.listAudit(p.id)).map((e) => e.action)).toEqual(["created"]);
   });
 });

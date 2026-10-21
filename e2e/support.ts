@@ -1,6 +1,7 @@
 // Shared constants for e2e journeys. Test-only values: they unlock nothing outside the
 // in-memory fixture backend running under `next dev` (see playwright.config.ts).
 export const E2E_ADMIN_DEV_PASSWORD = "e2e-admin-password-123";
+export const E2E_ADVISOR_DEV_PASSWORD = "e2e-advisor-password-456"; // test-only; must differ from the admin one
 export const E2E_TEST_ONLY_SESSION_SECRET = "e2e-test-only-session-secret-not-a-real-secret-0"; // 48 chars
 
 // Fixture facts the journeys rely on (src/server/repositories/fixture/sample-projects.ts,

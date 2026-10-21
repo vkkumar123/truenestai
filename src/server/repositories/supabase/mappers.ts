@@ -107,7 +107,7 @@ function unknownFact<T>(): FactValue<T> {
   return { status: "unknown", value: null, verification: "unverified", sources: [] };
 }
 
-function toFact<T>(row: FactRow | undefined): FactValue<T> {
+export function toFact<T>(row: FactRow | undefined): FactValue<T> {
   if (!row) return unknownFact<T>();
   return {
     status: row.status,

@@ -10,6 +10,22 @@ const { createFixtureRepositories } = await import("../repositories/fixture");
 const research = await import("./research");
 const { searchProperties } = await import("./search");
 const { StaffAuthError } = await import("../auth");
+const { factVersion } = await import("@/research/verification");
+
+/** changeVerification with the CURRENT fact version (what a fresh tab would post). */
+async function verify(
+  projectId: string,
+  field: "address" | "reraNumbers" | "constructionStatus" | "declaredPossession" | string,
+  to: string,
+  note: string | null,
+  deps: Parameters<typeof research.changeVerification>[1],
+) {
+  const repos = deps?.repos;
+  const p = repos ? await repos.research.getProjectByIdForStaff(projectId) : null;
+  const fact = p ? (p as unknown as Record<string, Parameters<typeof factVersion>[0]>)[field] : undefined;
+  const expectedVersion = fact ? factVersion(fact) : "none";
+  return research.changeVerification({ projectId, field, to, expectedVersion, note }, deps);
+}
 
 type Role = "admin" | "advisor";
 const as = (role: Role, userId = `staff-${role}`) => async () => ({ userId, role, mode: "fixture" as const, expiresAt: null });
@@ -42,7 +58,7 @@ async function makeReady(projectId: string, deps: { repos: ReturnType<typeof cre
     const r = await research.updateFact({ projectId, status: "known", ...source, ...f }, deps);
     if (!r.ok) throw new Error(JSON.stringify(r));
   }
-  const v = await research.changeVerification(projectId, "reraNumbers", "source_confirmed", "Checked portal", deps);
+  const v = await verify(projectId, "reraNumbers", "source_confirmed", "Checked portal", deps);
   if (!v.ok) throw new Error(JSON.stringify(v));
 }
 
@@ -54,7 +70,7 @@ describe("research services: session and actor checks", () => {
     await expect(research.getStaffProjectView("x", deps)).rejects.toBeInstanceOf(StaffAuthError);
     await expect(research.createProject({}, deps)).rejects.toBeInstanceOf(StaffAuthError);
     await expect(research.updateFact({}, deps)).rejects.toBeInstanceOf(StaffAuthError);
-    await expect(research.changeVerification("x", "address", "reviewed", null, deps)).rejects.toBeInstanceOf(StaffAuthError);
+    await expect(verify("x", "address", "reviewed", null, deps)).rejects.toBeInstanceOf(StaffAuthError);
     await expect(research.setPublished("x", true, deps)).rejects.toBeInstanceOf(StaffAuthError);
   });
 
@@ -64,7 +80,7 @@ describe("research services: session and actor checks", () => {
     const ai = { repos, requireStaff: as("admin", "ai") };
     expect(await research.createProject({ name: "AI Project", developerName: "X Y", localityId: "hebbal" }, ai)).toMatchObject({ ok: false, error: "forbidden" });
     expect(await research.updateFact({ projectId: p.id, field: "address", status: "known", value: "AI Road 1", ...source }, ai)).toMatchObject({ ok: false, error: "forbidden" });
-    expect(await research.changeVerification(p.id, "address", "reviewed", null, ai)).toMatchObject({ ok: false, error: "forbidden" });
+    expect(await verify(p.id, "address", "reviewed", null, ai)).toMatchObject({ ok: false, error: "forbidden" });
     expect(await research.setPublished(p.id, true, ai)).toMatchObject({ ok: false, error: "forbidden" });
     expect((await research.getStaffProjectView(p.id, admin)).ok && (await repos.research.listAudit(p.id)).length).toBe(1);
   });
@@ -105,7 +121,7 @@ describe("updateFact", () => {
     if (!r1.ok) throw new Error(JSON.stringify(r1));
     expect(r1.project.address).toMatchObject({ status: "known", value: "Test Road 1, Hebbal", verification: "unverified", sources: [{ sourceId: "sample-feed", url: "https://example.com/sample/x", observedAt: OBSERVED }] });
     expect(r1.project.completeness).toBeGreaterThan(0);
-    await research.changeVerification(p.id, "address", "reviewed", null, admin);
+    await verify(p.id, "address", "reviewed", null, admin);
     const r2 = await research.updateFact({ projectId: p.id, field: "address", status: "known", value: "Test Road 2, Hebbal", ...source }, admin);
     expect(r2.ok && r2.project.address.verification).toBe("unverified");
     const audit = await repos.research.listAudit(p.id);
@@ -129,10 +145,10 @@ describe("changeVerification", () => {
     const { repos, admin, advisor } = setup();
     const p = await newProject(advisor);
     await research.updateFact({ projectId: p.id, field: "address", status: "known", value: "Test Road 1, Hebbal", ...source }, advisor);
-    expect(await research.changeVerification(p.id, "address", "reviewed", null, advisor)).toMatchObject({ ok: false, error: "forbidden" });
-    expect(await research.changeVerification(p.id, "address", "source_confirmed", null, advisor)).toMatchObject({ ok: false, error: "forbidden" });
-    expect(await research.changeVerification(p.id, "address", "disputed", "Sources disagree", advisor)).toMatchObject({ ok: true });
-    expect(await research.changeVerification(p.id, "address", "reviewed", null, admin)).toMatchObject({ ok: true });
+    expect(await verify(p.id, "address", "reviewed", null, advisor)).toMatchObject({ ok: false, error: "forbidden" });
+    expect(await verify(p.id, "address", "source_confirmed", null, advisor)).toMatchObject({ ok: false, error: "forbidden" });
+    expect(await verify(p.id, "address", "disputed", "Sources disagree", advisor)).toMatchObject({ ok: true });
+    expect(await verify(p.id, "address", "reviewed", null, admin)).toMatchObject({ ok: true });
     const audit = (await repos.research.listAudit(p.id)).filter((e) => e.action === "verification_changed");
     expect(audit).toMatchObject([
       { fromVerification: "unverified", toVerification: "disputed", note: "Sources disagree", actorRole: "advisor" },
@@ -143,9 +159,9 @@ describe("changeVerification", () => {
   it("requires a source on the fact and a valid field/state", async () => {
     const { admin, advisor } = setup();
     const p = await newProject(advisor);
-    expect(await research.changeVerification(p.id, "address", "reviewed", null, admin)).toMatchObject({ ok: false, error: "validation" });
-    expect(await research.changeVerification(p.id, "price", "reviewed", null, admin)).toMatchObject({ ok: false, error: "validation" });
-    expect(await research.changeVerification(p.id, "address", "verified", null, admin)).toMatchObject({ ok: false, error: "validation" });
+    expect(await verify(p.id, "address", "reviewed", null, admin)).toMatchObject({ ok: false, error: "validation" });
+    expect(await verify(p.id, "price", "reviewed", null, admin)).toMatchObject({ ok: false, error: "validation" });
+    expect(await verify(p.id, "address", "verified", null, admin)).toMatchObject({ ok: false, error: "validation" });
   });
 });
 
@@ -198,5 +214,122 @@ describe("staff reads", () => {
     const v = await research.getStaffProjectView("sample-proj-unpublished", advisor);
     expect(v).toMatchObject({ ok: true, project: { published: false }, audit: [] });
     expect(await research.getStaffProjectView("missing", advisor)).toMatchObject({ ok: false, error: "not_found" });
+  });
+});
+
+describe("M3 review fixes", () => {
+  it("H1: a stale tab's verification is refused with 'conflict' and nothing changes", async () => {
+    const { repos, admin, advisor } = setup();
+    const p = await newProject(advisor);
+    await research.updateFact({ projectId: p.id, field: "reraNumbers", status: "known", value: "TEST/REG/0001", ...source }, advisor);
+    const tabA = await research.getStaffProjectView(p.id, admin); // reviewer loads the page
+    if (!tabA.ok) throw new Error("view");
+    // meanwhile someone edits the RERA number
+    await research.updateFact({ projectId: p.id, field: "reraNumbers", status: "known", value: "TEST/REG/0002", ...source }, advisor);
+    const stale = await research.changeVerification(
+      { projectId: p.id, field: "reraNumbers", to: "reviewed", expectedVersion: tabA.factVersions.reraNumbers },
+      admin,
+    );
+    expect(stale).toEqual({ ok: false, error: "conflict", message: "This fact changed since you loaded it — reload and review again." });
+    const after = await repos.research.getProjectByIdForStaff(p.id);
+    expect(after?.reraNumbers.verification).toBe("unverified");
+    expect((await repos.research.listAudit(p.id)).some((e) => e.action === "verification_changed")).toBe(false);
+    // the repository enforces it too (authoritative check)
+    const direct = await repos.research.setFactVerification(p.id, "reraNumbers", "reviewed", tabA.factVersions.reraNumbers, { actorId: "a", actorRole: "admin" }, null);
+    expect(direct).toMatchObject({ ok: false, error: "conflict" });
+    // a fresh load works
+    const tabB = await research.getStaffProjectView(p.id, admin);
+    if (!tabB.ok) throw new Error("view");
+    expect(await research.changeVerification({ projectId: p.id, field: "reraNumbers", to: "reviewed", expectedVersion: tabB.factVersions.reraNumbers }, admin)).toMatchObject({ ok: true });
+  });
+
+  it("H1: expectedVersion is required", async () => {
+    const { admin, advisor } = setup();
+    const p = await newProject(advisor);
+    await research.updateFact({ projectId: p.id, field: "address", status: "known", value: "Test Road 1, Hebbal", ...source }, advisor);
+    expect(await research.changeVerification({ projectId: p.id, field: "address", to: "reviewed", expectedVersion: "" }, admin)).toMatchObject({ ok: false, error: "validation" });
+  });
+
+  it("M3/D13: an edit that breaks readiness auto-unpublishes with audit; a harmless edit stays live", async () => {
+    const { repos, admin, advisor } = setup();
+    const p = await newProject(advisor);
+    await makeReady(p.id, admin);
+    expect(await research.setPublished(p.id, true, admin)).toMatchObject({ ok: true, changed: true });
+    const harmless = await research.updateFact({ projectId: p.id, field: "address", status: "known", value: "Test Road 9, Hebbal", ...source }, advisor);
+    expect(harmless).toMatchObject({ ok: true, autoUnpublished: false, project: { published: true } });
+    const breaking = await research.updateFact({ projectId: p.id, field: "reraNumbers", status: "known", value: "TEST/REG/0009", ...source }, advisor);
+    expect(breaking).toMatchObject({ ok: true, autoUnpublished: true, project: { published: false } });
+    expect(await repos.projects.getProjectBySlug(p.slug)).toBeNull();
+    const auto = (await repos.research.listAudit(p.id)).filter((e) => e.action === "unpublished");
+    expect(auto).toMatchObject([{ note: "auto: failed readiness after edit", actorId: "staff-advisor", actorRole: "advisor", field: "published" }]);
+  });
+
+  it("M3/D13: an advisor's dispute on a published project auto-unpublishes it", async () => {
+    const { repos, admin, advisor } = setup();
+    const p = await newProject(advisor);
+    await makeReady(p.id, admin);
+    await research.setPublished(p.id, true, admin);
+    const r = await verify(p.id, "constructionStatus", "disputed", "Conflicting reports", advisor);
+    expect(r).toMatchObject({ ok: true, autoUnpublished: true, project: { published: false } });
+    expect((await repos.research.listAudit(p.id)).at(-1)).toMatchObject({ action: "unpublished", note: "auto: failed readiness after edit" });
+  });
+
+  it("M1: fixture writes commit change and audit together (failed write leaves no trace)", async () => {
+    const { repos, admin } = setup();
+    const before = await repos.research.listAudit("sample-proj-lakeview");
+    const r = await repos.research.setFact("missing", "address", { status: "unknown", value: null, verification: "unverified", sources: [] }, { actorId: "a", actorRole: "admin" });
+    expect(r).toMatchObject({ ok: false, error: "not_found" });
+    const notReady = await research.setPublished("sample-proj-unpublished", true, admin);
+    expect(notReady).toMatchObject({ ok: false, error: "not_ready" });
+    expect(await repos.research.listAudit("sample-proj-unpublished")).toEqual([]);
+    expect(await repos.research.listAudit("sample-proj-lakeview")).toEqual(before);
+  });
+
+  it("L1: sourceId must be in the registry; listResearchSources exposes citable sources", async () => {
+    const { advisor } = setup();
+    const p = await newProject(advisor);
+    const r = await research.updateFact({ projectId: p.id, field: "address", status: "known", value: "Test Road 1, Hebbal", ...source, "sources[0].sourceId": "made-up" }, advisor);
+    expect(r).toMatchObject({ ok: false, error: "validation", errors: ["sources.0.sourceId: Unknown source — choose one from the registry"] });
+    const ids = research.listResearchSources().map((s) => s.id);
+    expect(ids).toContain("k-rera");
+    expect(ids).toContain("sample-feed"); // non-production only
+    vi.stubEnv("NODE_ENV", "production");
+    try {
+      expect(research.listResearchSources().map((s) => s.id)).not.toContain("sample-feed");
+      const prod = await research.updateFact({ projectId: p.id, field: "address", status: "known", value: "Test Road 1, Hebbal", ...source }, advisor);
+      expect(prod).toMatchObject({ ok: false, error: "validation" });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("L4: lastCheckedAt changes only on fact edits", async () => {
+    const { repos, admin } = setup();
+    const before = (await repos.research.getProjectByIdForStaff("sample-proj-jakkur"))!.lastCheckedAt;
+    await research.setPublished("sample-proj-jakkur", false, admin);
+    expect((await repos.research.getProjectByIdForStaff("sample-proj-jakkur"))!.lastCheckedAt).toBe(before);
+    await research.updateFact({ projectId: "sample-proj-jakkur", field: "address", status: "known", value: "SAMPLE Road 7, Jakkur", ...source }, admin);
+    expect((await repos.research.getProjectByIdForStaff("sample-proj-jakkur"))!.lastCheckedAt).not.toBe(before);
+  });
+
+  it("L6: audit entries carry actor id and a display name (id in fixture mode)", async () => {
+    const { advisor } = setup();
+    const p = await newProject(advisor);
+    const v = await research.getStaffProjectView(p.id, advisor);
+    expect(v.ok && v.audit[0]).toMatchObject({ actorId: "staff-advisor", actorName: "staff-advisor" });
+  });
+
+  it("L8: a new developer is created unless developerId is given; listDevelopers lists them", async () => {
+    const { advisor } = setup();
+    const a = await research.createProject({ name: "Dev Test One", developerName: "SAMPLE Developer A", localityId: "hebbal" }, advisor);
+    if (!a.ok) throw new Error("create");
+    expect(a.project.developer.id).not.toBe("sample-dev-a"); // same name, NOT merged
+    expect(a.project.developer.isSample).toBe(false);
+    const b = await research.createProject({ name: "Dev Test Two", developerId: "sample-dev-a", localityId: "hebbal" }, advisor);
+    expect(b.ok && b.project.developer.id).toBe("sample-dev-a");
+    expect(await research.createProject({ name: "Dev Test Three", developerId: "nope", localityId: "hebbal" }, advisor)).toMatchObject({ ok: false, error: "validation" });
+    expect(await research.createProject({ name: "Dev Test Four", localityId: "hebbal" }, advisor)).toMatchObject({ ok: false, error: "validation" });
+    const devs = await research.listDevelopers(advisor);
+    expect(devs.map((d) => d.id)).toEqual(expect.arrayContaining(["sample-dev-a", a.project.developer.id]));
   });
 });

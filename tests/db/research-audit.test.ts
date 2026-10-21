@@ -81,26 +81,164 @@ d("fact_review_events", () => {
     expect(owner).toMatch(/append-only/);
   });
 
-  it("research_set_fact replaces the current fact atomically with sources (service role only)", async () => {
-    const call = `select public.research_set_fact('p1', 'address', 'known', '"SAMPLE Road 9"', 'unverified',
-      '[{"sourceId":"sample-feed","url":"https://example.com/a","observedAt":"2026-10-01T00:00:00Z","documentDate":"2026-09-01"}]', 0.2)`;
-    expect((await errorAs(c, "anon", null, call))?.code).toBe("42501");
-    expect((await errorAs(c, "authenticated", STAFF_UID, call))?.code).toBe("42501");
+  const SRC = `'[{"sourceId":"sample-feed","url":"https://example.com/a","observedAt":"2026-10-01T00:00:00Z","documentDate":"2026-09-01"}]'`;
+  const setFact = (field: string, value: string, completeness = 0.2, verification = "unverified") =>
+    `select public.research_set_fact('p1', '${field}', 'known', '${value}', '${verification}', ${SRC}, ${completeness}, '${STAFF_UID}', 'admin') as r`;
+
+  /** Makes p1 publish-ready inside the current transaction. */
+  async function makeReady(q: Client) {
+    await q.query(setFact("rera_numbers", '["TEST/REG/0001"]', 0.4));
+    await q.query(setFact("construction_status", '"under_construction"', 0.6));
+    const { rows } = await q.query("select id from facts where project_id = 'p1' and field = 'rera_numbers' and is_current");
+    await q.query(`select public.research_set_verification('p1', 'rera_numbers', $1, 'source_confirmed', '${STAFF_UID}', 'admin', null)`, [rows[0].id]);
+  }
+
+  it("write RPCs are service-role only", async () => {
+    for (const role of ["anon", "authenticated"] as const) {
+      const sub = role === "anon" ? null : STAFF_UID;
+      expect((await errorAs(c, role, sub, setFact("address", '"SAMPLE Road 9"')))?.code).toBe("42501");
+      expect((await errorAs(c, role, sub, "select public.research_set_published('p1', true, 'x', 'admin')"))?.code).toBe("42501");
+      expect((await errorAs(c, role, sub, "select public.tn_publish_blockers('p1')"))?.code).toBe("42501");
+    }
+  });
+
+  it("research_set_fact replaces the current fact with sources and audits in one transaction", async () => {
     const r = await asRole(c, "service_role", null, async (q) => {
-      await q.query(call);
-      await q.query(call.replace("SAMPLE Road 9", "SAMPLE Road 10"));
+      await q.query(setFact("address", '"SAMPLE Road 9"'));
+      await q.query(setFact("address", '"SAMPLE Road 10"'));
       return {
         facts: (await q.query("select value, is_current from facts where project_id = 'p1' order by is_current")).rows,
         sources: (await q.query("select count(*)::int as n from fact_sources")).rows[0].n,
         completeness: (await q.query("select completeness from projects where id = 'p1'")).rows[0].completeness,
+        audit: (await q.query("select field, action, from_verification, to_verification, actor_id, at is not null as has_at from fact_review_events where action = 'fact_set' and id <> 'e1'")).rows,
       };
     });
     expect(r.facts).toEqual([{ value: "SAMPLE Road 9", is_current: false }, { value: "SAMPLE Road 10", is_current: true }]);
     expect(r.sources).toBe(2);
     expect(Number(r.completeness)).toBe(0.2);
-    const bad = await errorAs(c, "service_role", null,
-      `select public.research_set_fact('p1', 'address', 'known', '"x"', 'unverified', '[{"sourceId":"sample-feed","url":"http://insecure","observedAt":"2026-10-01T00:00:00Z"}]', 0)`);
-    expect(bad?.code).toBe("23514"); // https check; whole call rolled back
+    expect(r.audit).toEqual([
+      { field: "address", action: "fact_set", from_verification: "unverified", to_verification: "unverified", actor_id: STAFF_UID, has_at: true },
+      { field: "address", action: "fact_set", from_verification: "unverified", to_verification: "unverified", actor_id: STAFF_UID, has_at: true },
+    ]);
+  });
+
+  it("a failing fact write leaves no partial state (no fact, no audit)", async () => {
+    const r = await asRole(c, "service_role", null, async (q) => {
+      const before = (await q.query("select count(*)::int as n from fact_review_events")).rows[0].n;
+      await q.query("savepoint s");
+      let err: string | null = null;
+      try {
+        await q.query(`select public.research_set_fact('p1', 'address', 'known', '"x"', 'unverified',
+          '[{"sourceId":"sample-feed","url":"http://insecure","observedAt":"2026-10-01T00:00:00Z"}]', 0, 'u', 'admin')`);
+      } catch (e) {
+        err = (e as { code?: string }).code ?? null;
+      }
+      await q.query("rollback to savepoint s");
+      return {
+        err,
+        audit: (await q.query("select count(*)::int as n from fact_review_events")).rows[0].n - before,
+        facts: (await q.query("select count(*)::int as n from facts where project_id = 'p1'")).rows[0].n,
+      };
+    });
+    expect(r).toEqual({ err: "23514", audit: 0, facts: 0 });
+  });
+
+  it("research_set_verification refuses a stale fact id (conflict) and audits a valid change", async () => {
+    const r = await asRole(c, "service_role", null, async (q) => {
+      await q.query(setFact("address", '"SAMPLE Road 9"'));
+      const old = (await q.query("select id from facts where project_id = 'p1' and is_current")).rows[0].id;
+      await q.query(setFact("address", '"SAMPLE Road 10"')); // another tab edited it
+      const stale = (await q.query(`select public.research_set_verification('p1', 'address', $1, 'reviewed', 'u', 'admin', null) as r`, [old])).rows[0].r;
+      const cur = (await q.query("select id from facts where project_id = 'p1' and is_current")).rows[0].id;
+      const ok = (await q.query(`select public.research_set_verification('p1', 'address', $1, 'reviewed', 'u', 'admin', 'checked') as r`, [cur])).rows[0].r;
+      return {
+        stale,
+        ok,
+        verification: (await q.query("select verification from facts where id = $1", [cur])).rows[0].verification,
+        audit: (await q.query("select from_verification, to_verification, note from fact_review_events where action = 'verification_changed'")).rows,
+      };
+    });
+    expect(r.stale).toEqual({ status: "conflict" });
+    expect(r.ok).toMatchObject({ status: "ok", from: "unverified", auto_unpublished: false });
+    expect(r.verification).toBe("reviewed");
+    expect(r.audit).toEqual([{ from_verification: "unverified", to_verification: "reviewed", note: "checked" }]);
+  });
+
+  it("research_set_published re-checks readiness under lock; publishes and audits when ready", async () => {
+    const r = await asRole(c, "service_role", null, async (q) => {
+      const notReady = (await q.query("select public.research_set_published('p1', true, 'u', 'admin') as r")).rows[0].r;
+      await makeReady(q);
+      const blockers = (await q.query("select public.tn_publish_blockers('p1') as b")).rows[0].b;
+      const ok = (await q.query("select public.research_set_published('p1', true, 'u', 'admin') as r")).rows[0].r;
+      const again = (await q.query("select public.research_set_published('p1', true, 'u', 'admin') as r")).rows[0].r;
+      return {
+        notReady,
+        blockers,
+        ok,
+        again,
+        published: (await q.query("select published from projects where id = 'p1'")).rows[0].published,
+        audit: (await q.query("select action from fact_review_events where field = 'published'")).rows.map((x) => x.action),
+      };
+    });
+    expect(r.notReady.status).toBe("not_ready");
+    expect(r.notReady.blockers).toEqual(["reraNumbers: not known", "constructionStatus: not known", "completeness 0% is below 60%"]);
+    expect(r.blockers).toEqual([]);
+    expect(r).toMatchObject({ ok: { status: "ok" }, again: { status: "unchanged" }, published: true, audit: ["published"] });
+  });
+
+  it("auto-unpublishes (with audit) when an edit or a dispute breaks readiness (D13)", async () => {
+    const r = await asRole(c, "service_role", null, async (q) => {
+      await makeReady(q);
+      await q.query("select public.research_set_published('p1', true, 'u', 'admin')");
+      // address edit keeps readiness → stays published
+      const keep = (await q.query(setFact("address", '"SAMPLE Road 9"', 0.8))).rows[0].r;
+      // RERA re-edit resets verification → not ready → auto-unpublished
+      const drop = (await q.query(setFact("rera_numbers", '["TEST/REG/0002"]', 0.8))).rows[0].r;
+      const afterEdit = (await q.query("select published from projects where id = 'p1'")).rows[0].published;
+      // republish path: verify again, publish, then dispute construction status
+      const rera = (await q.query("select id from facts where project_id = 'p1' and field = 'rera_numbers' and is_current")).rows[0].id;
+      await q.query(`select public.research_set_verification('p1', 'rera_numbers', $1, 'reviewed', 'u', 'admin', null)`, [rera]);
+      await q.query("select public.research_set_published('p1', true, 'u', 'admin')");
+      const cs = (await q.query("select id from facts where project_id = 'p1' and field = 'construction_status' and is_current")).rows[0].id;
+      const dispute = (await q.query(`select public.research_set_verification('p1', 'construction_status', $1, 'disputed', '${STAFF_UID}', 'advisor', 'conflicting reports') as r`, [cs])).rows[0].r;
+      return {
+        keep,
+        drop,
+        afterEdit,
+        dispute,
+        published: (await q.query("select published from projects where id = 'p1'")).rows[0].published,
+        auto: (await q.query("select actor_id, actor_role, note from fact_review_events where action = 'unpublished' order by at, id")).rows,
+      };
+    });
+    expect(r.keep.auto_unpublished).toBe(false);
+    expect(r.drop.auto_unpublished).toBe(true);
+    expect(r.afterEdit).toBe(false);
+    expect(r.dispute.auto_unpublished).toBe(true);
+    expect(r.published).toBe(false);
+    expect(r.auto).toHaveLength(2);
+    for (const a of r.auto) expect(a.note).toBe("auto: failed readiness after edit");
+    expect(r.auto.map((a) => a.actor_role).sort()).toEqual(["admin", "advisor"]);
+  });
+
+  it("research_create_project creates developer + project + 'created' audit atomically", async () => {
+    const r = await asRole(c, "service_role", null, async (q) => {
+      const id = (await q.query(`select public.research_create_project('test-new', 'Test New', null, 'New Builder', 'hebbal', 13.03, 77.59, 'locality_centroid', 'u', 'advisor') as id`)).rows[0].id;
+      const id2 = (await q.query(`select public.research_create_project('test-new-2', 'Test New 2', 'd1', null, 'hebbal', 13.03, 77.59, 'locality_centroid', 'u', 'advisor') as id`)).rows[0].id;
+      return {
+        project: (await q.query("select published, is_sample, developer_id <> 'd1' as new_dev from projects where id = $1", [id])).rows[0],
+        dev2: (await q.query("select developer_id from projects where id = $1", [id2])).rows[0].developer_id,
+        audit: (await q.query("select action from fact_review_events where project_id = $1", [id])).rows,
+      };
+    });
+    expect(r).toEqual({ project: { published: false, is_sample: false, new_dev: true }, dev2: "d1", audit: [{ action: "created" }] });
+  });
+
+  it("project_search_index exposes normalised RERA numbers", async () => {
+    const rows = await asRole(c, "service_role", null, async (q) => {
+      await q.query(setFact("rera_numbers", '["prm/ka/rera 1251"]'));
+      return (await q.query("select rera_numbers_normalized from project_search_index where id = 'p1'")).rows;
+    });
+    expect(rows).toEqual([{ rera_numbers_normalized: ["PRMKARERA1251"] }]);
   });
 
   it("project_search_index exposes developer_name for text search", async () => {

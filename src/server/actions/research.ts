@@ -24,31 +24,39 @@ function formObject(formData: FormData): Record<string, string> {
   return out;
 }
 
-function revalidate(project: Project, publicChanged: boolean) {
-  revalidatePath("/admin/projects");
-  revalidatePath(`/admin/projects/${project.id}`);
-  if (publicChanged) {
-    revalidatePath("/projects");
-    revalidatePath(`/projects/${project.slug}`);
-    revalidatePath("/compare");
-    revalidatePath("/");
-  }
+function revalidatePublic(project: Project) {
+  revalidatePath("/projects");
+  revalidatePath(`/projects/${project.slug}`);
+  revalidatePath("/compare");
+  revalidatePath("/");
 }
+
+type Outcome = ResearchResult<{ project: Project; changed?: boolean; autoUnpublished?: boolean }>;
 
 async function run(
   label: string,
-  fn: () => Promise<ResearchResult<{ project: Project; changed?: boolean }>>,
-  success: string,
-  publicChanged: (project: Project, changed: boolean) => boolean,
+  fn: () => Promise<Outcome>,
+  success: (r: Extract<Outcome, { ok: true }>) => string,
+  /** Whether public pages may have changed (published project edited, publish state changed). */
+  publicChanged: (project: Project, r: Extract<Outcome, { ok: true }>) => boolean,
 ): Promise<ResearchActionState> {
-  // See mpa.ts: guarantees the post-action render is in the render phase even on failure.
-  ensureRenderPhaseAfterAction("/admin/projects", "layout");
   try {
     const r = await fn();
+    // Auth passed (no StaffAuthError). See mpa.ts — dev-only workaround, also for failures.
+    ensureRenderPhaseAfterAction("/admin/projects", "layout");
     if (!r.ok) return { status: "error", error: r.error, message: r.message, ...(r.errors ? { errors: r.errors } : {}) };
-    const changed = r.changed ?? true;
-    if (changed) revalidate(r.project, publicChanged(r.project, changed));
-    return { status: "success", message: success, projectId: r.project.id, slug: r.project.slug };
+    if (r.changed !== false) {
+      revalidatePath("/admin/projects");
+      revalidatePath(`/admin/projects/${r.project.id}`);
+      if (publicChanged(r.project, r)) revalidatePublic(r.project);
+    }
+    return {
+      status: "success",
+      message: success(r),
+      projectId: r.project.id,
+      slug: r.project.slug,
+      ...(r.autoUnpublished ? { autoUnpublished: true } : {}),
+    };
   } catch (e) {
     if (isStaffAuthError(e)) return { status: "error", error: "unauthenticated", message: e.message };
     log.error(`research.${label}_failed`, { reason: e instanceof Error ? e.name : "unknown" });
@@ -56,28 +64,43 @@ async function run(
   }
 }
 
-/** Fields: name, developerName, localityId, lat?, lng?. */
+const AUTO_UNPUBLISHED_MESSAGE = " The project no longer passes publish checks and was unpublished until an admin re-verifies it.";
+
+/** Fields: name, developerId? (existing developer) or developerName (creates a new one), localityId, lat?, lng?. */
 export async function createProjectAction(_prev: ResearchActionState, formData: FormData): Promise<ResearchActionState> {
-  return run("create_project", () => createProject(formObject(formData)), "Project created (unpublished).", () => false);
+  return run("create_project", () => createProject(formObject(formData)), () => "Project created (unpublished).", () => false);
 }
 
 /**
  * Fields: projectId, field (address|reraNumbers|constructionStatus|declaredPossession),
  * status (known|unknown), value (repeat or newline/comma-separate for reraNumbers),
- * sources[i].sourceId, sources[i].url, sources[i].observedAt, sources[i].documentDate?, sources[i].note? (i < 3).
+ * sources[i].sourceId (registry id, see listResearchSources), sources[i].url, sources[i].observedAt,
+ * sources[i].documentDate?, sources[i].note? (i < 3).
  */
 export async function updateFactAction(_prev: ResearchActionState, formData: FormData): Promise<ResearchActionState> {
-  return run("update_fact", () => updateFact(formEntries(formData)), "Fact saved as unverified.", (p) => p.published);
+  return run(
+    "update_fact",
+    () => updateFact(formEntries(formData)),
+    (r) => "Fact saved as unverified." + (r.autoUnpublished ? AUTO_UNPUBLISHED_MESSAGE : ""),
+    (p, r) => p.published || r.autoUnpublished === true,
+  );
 }
 
-/** Fields: projectId, field, to (verification state), note?. */
+/** Fields: projectId, field, to (verification state), expectedVersion (from getStaffProjectView.factVersions), note?. */
 export async function changeVerificationAction(_prev: ResearchActionState, formData: FormData): Promise<ResearchActionState> {
   const f = formObject(formData);
   return run(
     "change_verification",
-    () => changeVerification(f.projectId ?? "", f.field ?? "", f.to ?? "", f.note ?? null),
-    "Verification updated.",
-    (p) => p.published,
+    () =>
+      changeVerification({
+        projectId: f.projectId ?? "",
+        field: f.field ?? "",
+        to: f.to ?? "",
+        expectedVersion: f.expectedVersion ?? "",
+        note: f.note ?? null,
+      }),
+    (r) => "Verification updated." + (r.autoUnpublished ? AUTO_UNPUBLISHED_MESSAGE : ""),
+    (p, r) => p.published || r.autoUnpublished === true,
   );
 }
 
@@ -89,7 +112,7 @@ export async function setPublishedAction(_prev: ResearchActionState, formData: F
   return run(
     "set_published",
     () => setPublished(f.projectId ?? "", flag),
-    flag ? "Project published." : "Project unpublished.",
+    () => (flag ? "Project published." : "Project unpublished."),
     () => true,
   );
 }

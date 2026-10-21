@@ -118,26 +118,45 @@ and asserts the policies above.
 - Fixture mode (dev only): `ADMIN_DEV_PASSWORD` (≥ 12 chars, constant-time compare) issues an httpOnly,
   `sameSite=lax`, 8-hour HMAC-signed cookie (`SESSION_SECRET` ≥ 32 chars). Refused when `NODE_ENV=production`.
 
-## Staff research write-model (M3, D12)
+## Staff research write-model (M3, D12/D13)
 - Editable research facts: `address`, `reraNumbers`, `constructionStatus`, `declaredPossession`
   (DB `facts.field`: `address`, `rera_numbers`, `construction_status`, `declared_possession`).
-- Every edit needs ≥ 1 https source with an observed date (`src/research/fact-edit.ts`) and resets the fact's
-  verification to `unverified`. In Supabase the replacement is atomic via `research_set_fact(...)` (service role
-  only): the previous row is kept with `is_current = false`, the new row and its `fact_sources` are inserted, and
-  `projects.completeness` is updated (computed in the app with `computeCompleteness`).
+- **Who writes:** only signed-in human staff through `src/server/services/research.ts`. Workers and AI
+  pipelines never hold a staff session (they produce drafts elsewhere); the automated-actor id check
+  (`ai`, `system`, `bot`, `automation`) is kept as defence in depth.
+- Every edit needs ≥ 1 https source with an observed date (`src/research/fact-edit.ts`) whose `sourceId` is in
+  the source registry (`listResearchSources()`; fixture sources only outside production), and resets the
+  fact's verification to `unverified`.
+- **Atomicity (Supabase):** every staff write is one SQL transaction in a `security invoker`, fixed
+  `search_path`, service-role-only function that takes a row lock on the project and writes the audit row
+  (`at` defaulted by the DB):
+  `research_create_project`, `research_set_fact`, `research_set_verification`, `research_set_published`.
+  Fixture mode computes the next state + audit events, then commits both in one synchronous step.
+- **Stale reviews (H1):** a verification change carries `expectedVersion` = `factVersion(fact)` as the reviewer
+  saw it. The service and repository compare it with the current fact; `research_set_verification` also
+  requires the exact fact row to still be current. Otherwise → `conflict` ("This fact changed since you loaded
+  it — reload and review again").
 - Verification rules (`canSetVerification`): advisors may set `disputed` / `requires_professional_review`; only
-  admins may set `source_confirmed` / `reviewed`. A fact needs ≥ 1 source before its verification can change.
-- Publish / unpublish: admin only (`PUBLISH_ROLE`); publishing requires `evaluatePublishReadiness(project).ready`
-  (rules are an assumption pending owner approval). Automated actors (`ai`, `system`, `bot`, `automation`) can
-  never write research data.
+  admins may set `source_confirmed` / `reviewed` or reset to `unverified` (incl. clearing `disputed`). A fact
+  needs ≥ 1 source before its verification can change.
+- **Publish:** admin only (`PUBLISH_ROLE`). `research_set_published` re-checks readiness in SQL under the row
+  lock (`tn_publish_blockers`: RERA known and `source_confirmed`/`reviewed`, construction status known, no
+  disputed current fact, every known current fact has a source, completeness ≥ 0.6). These constants mirror
+  `src/research/publish.ts`; a unit test parses the migration to keep them in sync. Rules are an assumption
+  pending owner approval.
+- **D13 auto-unpublish:** after a fact edit or verification change, a published project that no longer passes
+  readiness is unpublished in the same transaction, audited as `unpublished` with note
+  `auto: failed readiness after edit` and the editing staff member as actor. Public pages are revalidated.
 - New projects start unpublished, `is_sample = false`, every fact unknown; slug = kebab(name + locality), made
-  unique with a numeric suffix.
+  unique with a numeric suffix. A **new developer** is created unless an existing `developerId` is chosen
+  (developers are never merged by name).
 - Audit: `fact_review_events` (↔ `FactAuditEvent`) — RLS on; staff SELECT via `is_staff()`; no client
   insert/update/delete; **append-only for every role** (trigger rejects UPDATE/DELETE/TRUNCATE, including the
-  service role and the owner). Every change (create, fact set, verification change, publish, unpublish) writes
-  one event with actor id + role; no-op publishes write nothing.
+  service role and the owner). Staff views show the actor id and `staff_profiles.display_name` when present.
 - Fixture mode: staff writes mutate the in-memory project list the public repository reads (per process,
-  lost on restart). The dev advisor login (`ADMIN_DEV_ADVISOR_PASSWORD`) exists to exercise role limits.
-- Search matches Lane B listings (by RERA) against all published projects (up to 50) — also under
-  `lane=external` — and returns `matchedProjects: { [listingId]: { id, slug, name } }` for
+  lost on restart); `lastCheckedAt` changes only on fact edits. The dev advisor login
+  (`ADMIN_DEV_ADVISOR_PASSWORD`) exists to exercise role limits.
+- Search matches Lane B listings against published projects looked up **by RERA number**
+  (`findPublishedProjectsByRera`, via `project_search_index.rera_numbers_normalized`; no project-count cap) —
+  also under `lane=external` — and returns `matchedProjects: { [listingId]: { id, slug, name } }` for
   "Researched version available".

@@ -3,7 +3,13 @@ import { z } from "zod";
 import type { ConstructionStatus, ExternalListing, Project } from "@/domain/types";
 import { BHK_OPTIONS, CONSTRUCTION_STATUS_OPTIONS, SEARCH_LANES, type BhkOption, type SearchLane } from "@/domain/search-options";
 import { getLocality } from "@/config/markets";
-import { discoverExternalWithReport, type DiscoverOptions, type DiscoveryReport } from "@/discovery";
+import {
+  defaultAdapters,
+  discoverExternalWithReport,
+  type DiscoverOptions,
+  type DiscoveryAdapter,
+  type DiscoveryReport,
+} from "@/discovery";
 import type { DiscoveryQuery } from "@/discovery";
 import { minResearchedResults } from "../env";
 import { log } from "../log";
@@ -47,8 +53,6 @@ export interface MatchedProjectRef {
 
 export const DEFAULT_SEARCH_LIMIT = 20;
 export const MAX_SEARCH_LIMIT = 50;
-/** Published projects considered when matching Lane B listings (repository max). */
-const MAX_MATCH_PROJECTS = 50;
 
 export const LANE_B_FILTER_NOTE =
   "Configuration (BHK) and construction-status filters apply only to researched projects; external listings do not provide them reliably.";
@@ -66,6 +70,8 @@ export interface SearchDeps {
   repos?: Repositories;
   discover?: (query: DiscoveryQuery, opts: DiscoverOptions) => Promise<Pick<DiscoveryReport, "listings" | "errors">>;
   minResearched?: number;
+  /** Lane B adapters (default: discovery's defaultAdapters()). */
+  adapters?: DiscoveryAdapter[];
 }
 
 /**
@@ -109,15 +115,35 @@ export async function searchProperties(raw: SearchQuery = {}, deps: SearchDeps =
     notes.push(LANE_B_FILTER_NOTE);
   }
 
-  // Match Lane B against ALL published projects (not just the filtered/lane-limited researched
-  // results), so a listing for a known project carries matchedProjectId even under lane=external.
-  const publishedForMatching = await repos.projects.listProjects({ limit: MAX_MATCH_PROJECTS });
-  const projectById = new Map([...publishedForMatching, ...researched].filter((p) => p.published === true).map((p) => [p.id, p]));
+  // Match Lane B against published projects found BY RERA NUMBER (no project-count cap), plus
+  // the returned researched results, so a listing for a known project carries matchedProjectId
+  // even under lane=external. The adapters are wrapped to look up candidates from each raw
+  // batch's RERA numbers; discovery reads `projects` only after all adapters finish (dedupe),
+  // which a unit test guards. The match itself is still made by discovery's dedupe.
+  const matchPool: Project[] = researched.filter((p) => p.published === true);
+  const projectById = new Map(matchPool.map((p) => [p.id, p]));
+  const addCandidates = (found: Project[]) => {
+    for (const p of found) {
+      if (p.published !== true || projectById.has(p.id)) continue;
+      projectById.set(p.id, p);
+      matchPool.push(p);
+    }
+  };
+  const withReraLookup = (a: DiscoveryAdapter): DiscoveryAdapter => ({
+    sourceId: a.sourceId,
+    search: async (query) => {
+      const raws = await a.search(query);
+      const numbers = raws.map((x) => x.reraNumber).filter((x): x is string => typeof x === "string" && x.trim() !== "");
+      if (numbers.length) addCandidates(await repos.projects.findPublishedProjectsByRera(numbers));
+      return raws;
+    },
+  });
 
   const discover = deps.discover ?? discoverExternalWithReport;
   let report: Pick<DiscoveryReport, "listings" | "errors">;
   try {
-    report = await discover({ localityId: q.localityId, text, limit }, { projects: [...projectById.values()] });
+    const adapters = (deps.adapters ?? defaultAdapters()).map(withReraLookup);
+    report = await discover({ localityId: q.localityId, text, limit }, { projects: matchPool, adapters });
   } catch (e) {
     log.error("search.discovery_failed", { reason: e instanceof Error ? e.name : "unknown" });
     return done({ researched, external: [], externalQueried: true, externalErrors: ["External listings are unavailable right now."], matchedProjects: {} });

@@ -13,10 +13,13 @@ import { revalidatePath } from "next/cache";
  * InvariantError("Received an underlying cookies object that does not match ...").
  *
  * Calling revalidatePath() in the action marks the path as revalidated, so Next switches to the
- * render phase (and syncs cookies) before rendering. We do this on every action outcome,
- * including failures, for the page that posted the form. Remove once fixed upstream.
+ * render phase (and syncs cookies) before rendering. Callers invoke it AFTER their auth check
+ * (only for requests that passed it), on success and failure. No-op in production.
+ * Remove once fixed upstream (D14).
  */
 export function ensureRenderPhaseAfterAction(path: string, type?: "layout" | "page"): void {
+  // Dev-only bug: production builds take a different branch in cookies() and do not throw.
+  if (process.env.NODE_ENV === "production") return;
   try {
     if (type) revalidatePath(path, type);
     else revalidatePath(path);

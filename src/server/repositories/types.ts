@@ -9,6 +9,8 @@ import type {
   LeadStatus,
   Project,
   ResearchFactField,
+  StaffRole,
+  Developer,
   VerificationState,
 } from "@/domain/types";
 import type { BhkOption } from "@/domain/search-options";
@@ -33,6 +35,8 @@ export interface ProjectRepository {
   getProjectsByIds(ids: string[]): Promise<Project[]>;
   /** True if any published project is SAMPLE data. Side-effect free. */
   hasSampleData(): Promise<boolean>;
+  /** Published projects with any of these RERA numbers (compared after normaliseRera). */
+  findPublishedProjectsByRera(numbers: string[]): Promise<Project[]>;
 }
 
 export interface ExternalListingRepository {
@@ -68,29 +72,65 @@ export interface LeadRepository {
 
 export interface NewProjectInput {
   name: string;
-  developerName: string;
+  /** Existing developer to attach. When absent, a NEW developer named `developerName` is created. */
+  developerId?: string;
+  developerName?: string;
   localityId: string; // must be an active locality (src/config/markets)
   lat?: number; // both or neither; default = locality centroid
   lng?: number;
 }
 
+/** The human staff member a write is attributed to (audit). */
+export interface AuditActor {
+  actorId: string;
+  actorRole: StaffRole;
+}
+
+export type ResearchWriteResult =
+  | { ok: true; project: Project; autoUnpublished: boolean }
+  | { ok: false; error: "not_found" | "conflict"; message: string };
+
+export type PublishWriteResult =
+  | { ok: true; project: Project; changed: boolean }
+  | { ok: false; error: "not_found" | "not_ready"; message: string; blockers?: string[] };
+
+/** Audit event plus a display name for the actor (staff_profiles.display_name, else the id). */
+export interface StaffAuditEntry extends FactAuditEvent {
+  actorName: string;
+}
+
+export const AUTO_UNPUBLISH_NOTE = "auto: failed readiness after edit";
+export const CONFLICT_MESSAGE = "This fact changed since you loaded it — reload and review again.";
+
 /**
- * STAFF write model (M3, D12). Never use for public reads: it returns unpublished projects.
- * Callers (services/research.ts) enforce staff session, roles and publish rules. Every write
- * recomputes `completeness` with computeCompleteness (src/research/publish.ts).
+ * STAFF write model (M3, D12/D13). Never use for public reads: it returns unpublished projects.
+ * Callers (services/research.ts) enforce staff session and role rules. Every write applies the
+ * change AND its audit event atomically (one SQL transaction in Supabase; a single commit in the
+ * fixture). After a fact or verification change, a published project that no longer passes
+ * readiness is unpublished in the same transaction (audit note AUTO_UNPUBLISH_NOTE).
+ * `completeness` is recomputed with computeCompleteness on fact writes.
  */
 export interface ResearchRepository {
   listAllProjects(): Promise<Project[]>;
   getProjectByIdForStaff(id: string): Promise<Project | null>;
-  /** Unique slug; unpublished; isSample false; every research fact unknown with no sources. */
-  createProject(input: NewProjectInput): Promise<Project>;
-  /** Replaces the current value (history kept where the backend supports it). null if no project. */
-  setFact(projectId: string, field: ResearchFactField, fact: FactValue<unknown>): Promise<Project | null>;
-  setFactVerification(projectId: string, field: ResearchFactField, to: VerificationState): Promise<Project | null>;
-  setPublished(projectId: string, published: boolean): Promise<Project | null>;
-  appendAudit(event: FactAuditEvent): Promise<void>;
+  listDevelopers(): Promise<Developer[]>;
+  /** Unique slug; unpublished; isSample false; every research fact unknown with no sources. Audits "created". */
+  createProject(input: NewProjectInput, actor: AuditActor): Promise<Project>;
+  /** Replaces the current value (history kept in Supabase). Audits fact_set. */
+  setFact(projectId: string, field: ResearchFactField, fact: FactValue<unknown>, actor: AuditActor): Promise<ResearchWriteResult>;
+  /** Applies only if factVersion(current fact) === expectedVersion, else "conflict". Audits. */
+  setFactVerification(
+    projectId: string,
+    field: ResearchFactField,
+    to: VerificationState,
+    expectedVersion: string,
+    actor: AuditActor,
+    note: string | null,
+  ): Promise<ResearchWriteResult>;
+  /** Publishing re-checks readiness under lock ("not_ready" with blockers). No-op → changed:false, no audit. */
+  setPublished(projectId: string, published: boolean, actor: AuditActor): Promise<PublishWriteResult>;
   /** Oldest first. */
-  listAudit(projectId: string): Promise<FactAuditEvent[]>;
+  listAudit(projectId: string): Promise<StaffAuditEntry[]>;
 }
 
 export interface Repositories {

@@ -46,11 +46,11 @@ export async function submitLeadAction(_prev: SubmitLeadState, formData: FormDat
  * Form fields: leadId, status.
  */
 export async function updateLeadStatusAction(_prev: UpdateLeadStatusState, formData: FormData): Promise<UpdateLeadStatusState> {
-  ensureRenderPhaseAfterAction("/admin", "layout"); // see mpa.ts
   const leadId = String(formData.get("leadId") ?? "");
   const status = String(formData.get("status") ?? "") as LeadStatus;
   try {
     const result = await updateLeadStatus(leadId, status);
+    ensureRenderPhaseAfterAction("/admin", "layout"); // after the auth check; see mpa.ts
     if (!result.ok) return { status: "error", message: result.message };
     revalidatePath("/admin", "layout");
     return { status: "success", leadId: result.lead.id, leadStatus: result.lead.status, message: "Status updated." };

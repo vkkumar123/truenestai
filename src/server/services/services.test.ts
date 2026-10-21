@@ -190,6 +190,26 @@ describe("searchProperties", () => {
     for (const id of Object.keys(r.matchedProjects)) expect(r.external.some((l) => l.id === id)).toBe(true);
   });
 
+  it("L7: matches by RERA lookup beyond any project-count cap, via the real discovery pipeline", async () => {
+    const repos = createFixtureRepositories();
+    const lookup = vi.spyOn(repos.projects, "findPublishedProjectsByRera");
+    const list = vi.spyOn(repos.projects, "listProjects");
+    const { discoverExternalWithReport } = await import("@/discovery");
+    // locality with no researched results for this RERA → match must come from the lookup
+    const r = await searchProperties({ localityId: "hebbal", lane: "external" }, { repos, discover: discoverExternalWithReport });
+    expect(lookup).toHaveBeenCalled();
+    expect(lookup.mock.calls.flat(2)).toContain("SAMPLE-RERA-0001");
+    expect(list).not.toHaveBeenCalled(); // no "first 50 projects" scan
+    expect(Object.values(r.matchedProjects).map((m) => m.id)).toContain("sample-proj-lakeview");
+  });
+
+  it("findPublishedProjectsByRera normalises numbers and ignores unpublished projects", async () => {
+    const repos = createFixtureRepositories();
+    expect((await repos.projects.findPublishedProjectsByRera(["sample rera 0001"])).map((p) => p.id)).toEqual(["sample-proj-lakeview"]);
+    expect(await repos.projects.findPublishedProjectsByRera(["SAMPLE-RERA-0099"])).toEqual([]); // unpublished
+    expect(await repos.projects.findPublishedProjectsByRera([])).toEqual([]);
+  });
+
   it("never matches listings to unpublished projects", async () => {
     const repos = createFixtureRepositories();
     const seen: string[][] = [];

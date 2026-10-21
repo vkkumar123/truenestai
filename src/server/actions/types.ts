@@ -19,10 +19,10 @@ export type UpdateLeadStatusState =
 
 export type ResearchActionState =
   | { status: "idle" }
-  | { status: "success"; message: string; projectId: string; slug: string }
+  | { status: "success"; message: string; projectId: string; slug: string; autoUnpublished?: boolean }
   | {
       status: "error";
-      error: "validation" | "forbidden" | "not_found" | "not_ready" | "unauthenticated" | "unavailable";
+      error: "validation" | "forbidden" | "not_found" | "not_ready" | "conflict" | "unauthenticated" | "unavailable";
       message: string;
       errors?: string[];
     };

@@ -6,8 +6,9 @@ import { createAnonClient, createServiceRoleClient } from "./client";
 import { SupabaseExternalListingRepository } from "./external-listings";
 import { SupabaseLeadRepository } from "./leads";
 import { SupabaseProjectRepository } from "./projects";
+import { SupabaseResearchRepository } from "./research";
 
-export { SupabaseProjectRepository, SupabaseExternalListingRepository, SupabaseLeadRepository };
+export { SupabaseProjectRepository, SupabaseExternalListingRepository, SupabaseLeadRepository, SupabaseResearchRepository };
 
 /** Validates env eagerly (clear error), creates the service-role client lazily on first use. */
 export function createSupabaseRepositories(): Repositories {
@@ -18,6 +19,7 @@ export function createSupabaseRepositories(): Repositories {
   return {
     backend: "supabase",
     projects: new SupabaseProjectRepository(anon),
+    research: new SupabaseResearchRepository(serviceClient),
     externalListings: new SupabaseExternalListingRepository(anon, serviceClient),
     leads: new SupabaseLeadRepository(serviceClient),
   };

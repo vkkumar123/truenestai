@@ -81,3 +81,6 @@ No legal or regulatory facts are asserted in these docs; any statement about RER
 - **Context:** Staff must add facts with evidence and move them through verification before a project is published.
 - **Decision:** Editable fact fields are `address`, `reraNumbers`, `constructionStatus`, `declaredPossession` (units/regulatory records/documents follow in later slices). Every edit needs ≥ 1 https `SourceRef` with an observed date; each change writes a `FactAuditEvent`. Advisors may add facts (always `unverified`) and mark `disputed`/`requires_professional_review`; only admins may set `source_confirmed`/`reviewed` and publish/unpublish. Automated actors can never verify or publish. Publish rules live in `src/research/publish.ts` (assumption pending owner approval).
 - **Document upload to Storage** is deferred to M2 (needs Supabase Storage); M3 records document metadata only.
+
+## D13 — Edits to a published project keep it published — accepted (2026-10-21)
+- An edit resets that fact to `unverified`; the public page already shows each fact's verification badge, so buyers see it as unverified. Auto-unpublishing on every correction would hide good projects. The admin list flags published projects that no longer pass readiness so an admin re-verifies or unpublishes. Revisit with the owner.

@@ -29,7 +29,7 @@ export class SupabaseProjectRepository implements ProjectRepository {
     const text = filter.text?.trim();
     if (text) {
       const term = ilikeTerm(text);
-      const ors = [`name.ilike.${term}`, `slug.ilike.${term}`];
+      const ors = [`name.ilike.${term}`, `slug.ilike.${term}`, `developer_name.ilike.${term}`];
       const locIds = findLocalitiesByText(text).map((l) => l.id);
       if (locIds.length) ors.push(`locality_id.in.(${locIds.join(",")})`);
       q = q.or(ors.join(","));

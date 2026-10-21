@@ -14,9 +14,8 @@ import { FixedWindowRateLimiter } from "./rate-limit";
 
 export interface SubmitLeadContext {
   /**
-   * Client key for rate limiting, e.g. the first X-Forwarded-For hop. ASSUMPTION: the app runs
-   * behind a trusted proxy that overwrites X-Forwarded-For; otherwise this value is spoofable.
-   * Hashed before it is held in memory.
+   * Client key for rate limiting, from clientIpFromForwardedFor (right-most trusted hop, see
+   * TRUSTED_PROXY_HOPS). Hashed before it is held in memory.
    */
   ipKey: string | null;
   now?: Date;
@@ -68,11 +67,13 @@ export async function submitLead(raw: unknown, ctx: SubmitLeadContext, deps: Lea
 
   const limiter = deps.limiter ?? leadRateLimiter();
   const at = (ctx.now ?? new Date()).getTime();
-  const contact = (input.email ?? input.phone ?? "").trim().toLowerCase();
-  const byIp = limiter.hit(`lead:ip:${ctx.ipKey ?? "unknown"}`, at);
-  const byContact = limiter.hit(`lead:contact:${contact}`, at);
-  if (!byIp.allowed || !byContact.allowed) {
-    log.warn("lead.rate_limited", { key: byIp.allowed ? "contact" : "ip" });
+  // One key for the client IP and one per contact value present (email and phone separately).
+  const keys = [`lead:ip:${ctx.ipKey ?? "unknown"}`];
+  if (input.email) keys.push(`lead:email:${input.email.trim().toLowerCase()}`);
+  if (input.phone) keys.push(`lead:phone:${input.phone}`);
+  const blocked = keys.map((k) => ({ k, r: limiter.hit(k, at) })).filter((x) => !x.r.allowed);
+  if (blocked.length) {
+    log.warn("lead.rate_limited", { keys: blocked.map((b) => b.k.split(":")[1]) });
     return RATE_LIMITED;
   }
 

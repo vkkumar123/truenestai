@@ -179,6 +179,29 @@ describe("searchProperties", () => {
     expect(ext.notes?.[0]).toMatch(/apply only to researched/);
   });
 
+  it("lane=external matches listings to published projects and exposes matchedProjects", async () => {
+    const repos = createFixtureRepositories();
+    const { discoverExternalWithReport } = await import("@/discovery");
+    const r = await searchProperties({ localityId: "hebbal", lane: "external" }, { repos, discover: discoverExternalWithReport });
+    expect(r.researched).toEqual([]);
+    const matched = r.external.find((l) => l.matchedProjectId === "sample-proj-lakeview");
+    expect(matched).toBeDefined(); // kept, because nothing researched was returned
+    expect(r.matchedProjects[matched!.id]).toEqual({ id: "sample-proj-lakeview", slug: "sample-lakeview-residences", name: "SAMPLE Lakeview Residences" });
+    for (const id of Object.keys(r.matchedProjects)) expect(r.external.some((l) => l.id === id)).toBe(true);
+  });
+
+  it("never matches listings to unpublished projects", async () => {
+    const repos = createFixtureRepositories();
+    const seen: string[][] = [];
+    const discover = vi.fn(async (_q: unknown, opts: { projects?: { id: string; published: boolean }[] }) => {
+      seen.push((opts.projects ?? []).map((p) => p.id));
+      return { listings: [listing("x", UNPUBLISHED.id)], errors: [] };
+    });
+    const r = await searchProperties({ lane: "external" }, { repos, discover });
+    expect(seen[0]).not.toContain(UNPUBLISHED.id);
+    expect(r.matchedProjects).toEqual({});
+  });
+
   it("returns nothing for an unknown locality id", async () => {
     const r = await searchProperties({ localityId: "not-a-locality" }, { repos: createFixtureRepositories() });
     expect(r.researched).toEqual([]);
@@ -275,6 +298,16 @@ describe("submitLead", () => {
     // Same contact from new IPs is still limited by the contact key.
     expect((await submitLead(lead("a@example.com"), { ipKey: "8.8.8.8" }, { repos, limiter: l })).ok).toBe(true);
     expect(await submitLead(lead("A@example.com"), { ipKey: "7.7.7.7" }, { repos, limiter: l })).toMatchObject({ reason: "rate_limited" });
+  });
+
+  it("limits per each present contact value (phone counted separately from email)", async () => {
+    const repos = createFixtureRepositories();
+    const l = new FixedWindowRateLimiter(1, 60_000);
+    const withPhone = (email: string, ip: string) =>
+      submitLead({ ...validLead, email, phone: "9876543210" }, { ipKey: ip }, { repos, limiter: l });
+    expect((await withPhone("one@example.com", "1.0.0.1")).ok).toBe(true);
+    // new email + new IP, same phone → limited by the phone key
+    expect(await withPhone("two@example.com", "1.0.0.2")).toMatchObject({ reason: "rate_limited" });
   });
 
   it("never logs personal data", async () => {

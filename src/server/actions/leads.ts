@@ -4,6 +4,8 @@ import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
 import type { LeadStatus } from "@/domain/types";
 import { isStaffAuthError } from "../auth";
+import { clientIpFromForwardedFor, UNKNOWN_CLIENT_KEY } from "../client-ip";
+import { trustedProxyHops } from "../env";
 import { log } from "../log";
 import { submitLead, updateLeadStatus } from "../services/leads";
 import type { SubmitLeadState, UpdateLeadStatusState } from "./types";
@@ -17,13 +19,11 @@ function formToObject(formData: FormData): Record<string, string> {
   return out;
 }
 
-async function clientIpKey(): Promise<string | null> {
+async function clientIpKey(): Promise<string> {
+  // Never trusts client-supplied (left-most) X-Forwarded-For entries; see client-ip.ts and
+  // TRUSTED_PROXY_HOPS. All requests without the header share one bucket.
   const h = await headers();
-  // TRUSTED-PROXY ASSUMPTION: the host (e.g. Vercel) overwrites X-Forwarded-For, so the first hop
-  // is the client. Without such a proxy this header is client-controlled and spoofable; the
-  // per-contact limit in submitLead still applies.
-  const xff = h.get("x-forwarded-for")?.split(",")[0]?.trim();
-  return xff || h.get("x-real-ip")?.trim() || null;
+  return clientIpFromForwardedFor(h.get("x-forwarded-for"), trustedProxyHops()) ?? UNKNOWN_CLIENT_KEY;
 }
 
 /**

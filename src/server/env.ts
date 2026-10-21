@@ -64,6 +64,14 @@ export function minResearchedResults(env: NodeJS.ProcessEnv = process.env): numb
   return intEnv(env.MIN_RESEARCHED_RESULTS, 3, 0, 50, "MIN_RESEARCHED_RESULTS");
 }
 
+/**
+ * Number of trusted proxies that append to X-Forwarded-For in front of the app (>= 1).
+ * 1 = use the last entry; 2 = second-from-last (Cloud Run behind a Google external LB).
+ */
+export function trustedProxyHops(env: NodeJS.ProcessEnv = process.env): number {
+  return intEnv(env.TRUSTED_PROXY_HOPS, 1, 1, 10, "TRUSTED_PROXY_HOPS");
+}
+
 export function leadRateLimit(env: NodeJS.ProcessEnv = process.env): { max: number; windowMs: number } {
   return {
     max: intEnv(env.LEAD_RATE_LIMIT_MAX, 5, 1, 1000, "LEAD_RATE_LIMIT_MAX"),
@@ -80,6 +88,22 @@ export function sessionSecret(env: NodeJS.ProcessEnv = process.env): string {
     throw new ConfigError(`SESSION_SECRET must be set and at least ${MIN_SESSION_SECRET_LENGTH} characters.`);
   }
   return s;
+}
+
+/**
+ * Optional DEV-ONLY advisor password (fixture mode). null when unset. Throws ConfigError when set
+ * but shorter than 12 characters or equal to ADMIN_DEV_PASSWORD.
+ */
+export function adminDevAdvisorPassword(env: NodeJS.ProcessEnv = process.env): string | null {
+  const p = env.ADMIN_DEV_ADVISOR_PASSWORD ?? "";
+  if (p === "") return null;
+  if (p.length < MIN_ADMIN_DEV_PASSWORD_LENGTH) {
+    throw new ConfigError(`ADMIN_DEV_ADVISOR_PASSWORD must be at least ${MIN_ADMIN_DEV_PASSWORD_LENGTH} characters.`);
+  }
+  if (p === (env.ADMIN_DEV_PASSWORD ?? "")) {
+    throw new ConfigError("ADMIN_DEV_ADVISOR_PASSWORD must differ from ADMIN_DEV_PASSWORD.");
+  }
+  return p;
 }
 
 export function adminDevPassword(env: NodeJS.ProcessEnv = process.env): string {

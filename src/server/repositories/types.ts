@@ -1,5 +1,16 @@
 import "server-only";
-import type { ConstructionStatus, ExternalListing, Lead, LeadRequestType, LeadStatus, Project } from "@/domain/types";
+import type {
+  ConstructionStatus,
+  ExternalListing,
+  FactAuditEvent,
+  FactValue,
+  Lead,
+  LeadRequestType,
+  LeadStatus,
+  Project,
+  ResearchFactField,
+  VerificationState,
+} from "@/domain/types";
 import type { BhkOption } from "@/domain/search-options";
 import type { LeadQualification } from "@/leads/qualification";
 
@@ -55,9 +66,37 @@ export interface LeadRepository {
   updateStatus(id: string, status: LeadStatus, actorId: string): Promise<UpdateLeadStatusResult>;
 }
 
+export interface NewProjectInput {
+  name: string;
+  developerName: string;
+  localityId: string; // must be an active locality (src/config/markets)
+  lat?: number; // both or neither; default = locality centroid
+  lng?: number;
+}
+
+/**
+ * STAFF write model (M3, D12). Never use for public reads: it returns unpublished projects.
+ * Callers (services/research.ts) enforce staff session, roles and publish rules. Every write
+ * recomputes `completeness` with computeCompleteness (src/research/publish.ts).
+ */
+export interface ResearchRepository {
+  listAllProjects(): Promise<Project[]>;
+  getProjectByIdForStaff(id: string): Promise<Project | null>;
+  /** Unique slug; unpublished; isSample false; every research fact unknown with no sources. */
+  createProject(input: NewProjectInput): Promise<Project>;
+  /** Replaces the current value (history kept where the backend supports it). null if no project. */
+  setFact(projectId: string, field: ResearchFactField, fact: FactValue<unknown>): Promise<Project | null>;
+  setFactVerification(projectId: string, field: ResearchFactField, to: VerificationState): Promise<Project | null>;
+  setPublished(projectId: string, published: boolean): Promise<Project | null>;
+  appendAudit(event: FactAuditEvent): Promise<void>;
+  /** Oldest first. */
+  listAudit(projectId: string): Promise<FactAuditEvent[]>;
+}
+
 export interface Repositories {
   backend: "fixture" | "supabase";
   projects: ProjectRepository;
+  research: ResearchRepository;
   externalListings: ExternalListingRepository;
   leads: LeadRepository;
 }

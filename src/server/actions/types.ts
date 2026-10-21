@@ -16,3 +16,13 @@ export type UpdateLeadStatusState =
   | { status: "idle" }
   | { status: "success"; leadId: string; leadStatus: string; message: string }
   | { status: "error"; message: string; unauthenticated?: boolean };
+
+export type ResearchActionState =
+  | { status: "idle" }
+  | { status: "success"; message: string; projectId: string; slug: string }
+  | {
+      status: "error";
+      error: "validation" | "forbidden" | "not_found" | "not_ready" | "unauthenticated" | "unavailable";
+      message: string;
+      errors?: string[];
+    };

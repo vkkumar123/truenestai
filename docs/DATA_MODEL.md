@@ -106,9 +106,10 @@ and asserts the policies above.
 - Logs carry only `redactLeadForLog` fields (id, status, requestType). Audit events carry no PII.
 - Fixture mode keeps leads in server memory per process (dev only).
 - Rate limiting (dev-grade, in-memory per process; production needs a shared store) counts only *valid*
-  submissions, keyed both on the client IP and on the hashed email/phone. The IP is the first
-  `X-Forwarded-For` hop, which is trustworthy only behind a proxy that overwrites that header (e.g. Vercel);
-  otherwise it is client-controlled and only the per-contact key is meaningful.
+  submissions, keyed on the client IP and separately on each contact value given (hashed email, hashed phone).
+  The client IP is taken `TRUSTED_PROXY_HOPS` entries from the **right** of `X-Forwarded-For`
+  (`src/server/client-ip.ts`); client-supplied left entries are never trusted. Requests without the header share
+  one `unknown` bucket.
 - A scheduled purge of leads past `retention_until` is not implemented yet.
 
 ## Auth
@@ -116,3 +117,27 @@ and asserts the policies above.
   Session refresh needs a Next proxy/middleware (not part of this slice).
 - Fixture mode (dev only): `ADMIN_DEV_PASSWORD` (≥ 12 chars, constant-time compare) issues an httpOnly,
   `sameSite=lax`, 8-hour HMAC-signed cookie (`SESSION_SECRET` ≥ 32 chars). Refused when `NODE_ENV=production`.
+
+## Staff research write-model (M3, D12)
+- Editable research facts: `address`, `reraNumbers`, `constructionStatus`, `declaredPossession`
+  (DB `facts.field`: `address`, `rera_numbers`, `construction_status`, `declared_possession`).
+- Every edit needs ≥ 1 https source with an observed date (`src/research/fact-edit.ts`) and resets the fact's
+  verification to `unverified`. In Supabase the replacement is atomic via `research_set_fact(...)` (service role
+  only): the previous row is kept with `is_current = false`, the new row and its `fact_sources` are inserted, and
+  `projects.completeness` is updated (computed in the app with `computeCompleteness`).
+- Verification rules (`canSetVerification`): advisors may set `disputed` / `requires_professional_review`; only
+  admins may set `source_confirmed` / `reviewed`. A fact needs ≥ 1 source before its verification can change.
+- Publish / unpublish: admin only (`PUBLISH_ROLE`); publishing requires `evaluatePublishReadiness(project).ready`
+  (rules are an assumption pending owner approval). Automated actors (`ai`, `system`, `bot`, `automation`) can
+  never write research data.
+- New projects start unpublished, `is_sample = false`, every fact unknown; slug = kebab(name + locality), made
+  unique with a numeric suffix.
+- Audit: `fact_review_events` (↔ `FactAuditEvent`) — RLS on; staff SELECT via `is_staff()`; no client
+  insert/update/delete; **append-only for every role** (trigger rejects UPDATE/DELETE/TRUNCATE, including the
+  service role and the owner). Every change (create, fact set, verification change, publish, unpublish) writes
+  one event with actor id + role; no-op publishes write nothing.
+- Fixture mode: staff writes mutate the in-memory project list the public repository reads (per process,
+  lost on restart). The dev advisor login (`ADMIN_DEV_ADVISOR_PASSWORD`) exists to exercise role limits.
+- Search matches Lane B listings (by RERA) against all published projects (up to 50) — also under
+  `lane=external` — and returns `matchedProjects: { [listingId]: { id, slug, name } }` for
+  "Researched version available".

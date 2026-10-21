@@ -32,10 +32,23 @@ export interface SearchResult {
   externalErrors?: string[];
   /** User-facing notes about how filters were applied (e.g. filters that do not apply to Lane B). */
   notes?: string[];
+  /**
+   * For shown Lane B listings that dedupe matched (by RERA number) to a PUBLISHED researched
+   * project: listing id → that project, so the UI can offer "Researched version available".
+   */
+  matchedProjects: Record<string, MatchedProjectRef>;
+}
+
+export interface MatchedProjectRef {
+  id: string;
+  slug: string;
+  name: string;
 }
 
 export const DEFAULT_SEARCH_LIMIT = 20;
 export const MAX_SEARCH_LIMIT = 50;
+/** Published projects considered when matching Lane B listings (repository max). */
+const MAX_MATCH_PROJECTS = 50;
 
 export const LANE_B_FILTER_NOTE =
   "Configuration (BHK) and construction-status filters apply only to researched projects; external listings do not provide them reliably.";
@@ -72,7 +85,7 @@ export async function searchProperties(raw: SearchQuery = {}, deps: SearchDeps =
   const bhk: BhkOption | undefined = q.bhk;
   const laneAOnlyFilter = Boolean(bhk || q.status);
   // An unknown locality id yields no results rather than silently searching everywhere.
-  if (q.localityId && !getLocality(q.localityId)) return { researched: [], external: [], externalQueried: false };
+  if (q.localityId && !getLocality(q.localityId)) return { researched: [], external: [], externalQueried: false, matchedProjects: {} };
 
   const researched =
     lane === "external"
@@ -84,28 +97,33 @@ export async function searchProperties(raw: SearchQuery = {}, deps: SearchDeps =
   const notes: string[] = [];
   const done = (r: SearchResult): SearchResult => (notes.length ? { ...r, notes } : r);
 
-  if (lane === "researched") return done({ researched, external: [], externalQueried: false });
+  if (lane === "researched") return done({ researched, external: [], externalQueried: false, matchedProjects: {} });
   if (lane === "all") {
     const threshold = deps.minResearched ?? minResearchedResults();
-    if (researched.length >= threshold) return done({ researched, external: [], externalQueried: false });
+    if (researched.length >= threshold) return done({ researched, external: [], externalQueried: false, matchedProjects: {} });
     if (laneAOnlyFilter) {
       notes.push(LANE_B_FILTER_NOTE);
-      return done({ researched, external: [], externalQueried: false });
+      return done({ researched, external: [], externalQueried: false, matchedProjects: {} });
     }
   } else if (laneAOnlyFilter) {
     notes.push(LANE_B_FILTER_NOTE);
   }
 
+  // Match Lane B against ALL published projects (not just the filtered/lane-limited researched
+  // results), so a listing for a known project carries matchedProjectId even under lane=external.
+  const publishedForMatching = await repos.projects.listProjects({ limit: MAX_MATCH_PROJECTS });
+  const projectById = new Map([...publishedForMatching, ...researched].filter((p) => p.published === true).map((p) => [p.id, p]));
+
   const discover = deps.discover ?? discoverExternalWithReport;
   let report: Pick<DiscoveryReport, "listings" | "errors">;
   try {
-    report = await discover({ localityId: q.localityId, text, limit }, { projects: researched });
+    report = await discover({ localityId: q.localityId, text, limit }, { projects: [...projectById.values()] });
   } catch (e) {
     log.error("search.discovery_failed", { reason: e instanceof Error ? e.name : "unknown" });
-    return done({ researched, external: [], externalQueried: true, externalErrors: ["External listings are unavailable right now."] });
+    return done({ researched, external: [], externalQueried: true, externalErrors: ["External listings are unavailable right now."], matchedProjects: {} });
   }
 
-  const researchedIds = new Set(researched.map((p) => p.id));
+  const researchedIds = new Set(researched.map((p) => p.id)); // only these are hidden as duplicates
   const external = report.listings
     .filter((l) => l.lane === "external")
     .filter((l) => !(l.matchedProjectId && researchedIds.has(l.matchedProjectId)))
@@ -120,7 +138,13 @@ export async function searchProperties(raw: SearchQuery = {}, deps: SearchDeps =
     }
   }
 
-  const result: SearchResult = { researched, external, externalQueried: true };
+  const matchedProjects: Record<string, MatchedProjectRef> = {};
+  for (const l of external) {
+    const p = l.matchedProjectId ? projectById.get(l.matchedProjectId) : undefined;
+    if (p) matchedProjects[l.id] = { id: p.id, slug: p.slug, name: p.name };
+  }
+
+  const result: SearchResult = { researched, external, externalQueried: true, matchedProjects };
   if (report.errors.length) {
     result.externalErrors = report.errors.map((err) => `Source "${err.sourceId}" could not be reached; its listings are not shown.`);
     log.warn("search.discovery_source_errors", { sources: report.errors.map((e) => e.sourceId) });

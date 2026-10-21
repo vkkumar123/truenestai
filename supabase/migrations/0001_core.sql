@@ -472,6 +472,7 @@ select
   p.locality_id,
   p.published,
   p.is_sample,
+  (select d.name from public.developers d where d.id = p.developer_id) as developer_name,
   (select f.value #>> '{}' from public.facts f
     where f.project_id = p.id and f.field = 'construction_status' and f.is_current and f.status = 'known'
     limit 1) as construction_status,

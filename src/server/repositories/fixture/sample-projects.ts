@@ -13,6 +13,7 @@ import type {
   VerificationState,
 } from "@/domain/types";
 import { getLocality } from "@/config/markets";
+import { computeCompleteness } from "@/research/publish";
 
 // OBVIOUSLY FICTIONAL sample data for local development and tests. Not real projects,
 // developers, RERA numbers, documents or URLs. Every record has isSample: true.
@@ -93,14 +94,12 @@ interface Spec {
   published?: boolean;
 }
 
-function completeness(p: Pick<Project, "address" | "reraNumbers" | "constructionStatus" | "declaredPossession" | "units">): number {
-  const facts: FactValue<unknown>[] = [p.address, p.reraNumbers, p.constructionStatus, p.declaredPossession];
-  for (const u of p.units) facts.push(u.carpetAreaSqft, u.priceInr);
-  const knownCount = facts.filter((f) => f.status === "known").length;
-  return facts.length ? Math.round((knownCount / facts.length) * 100) / 100 : 0;
+function build(s: Spec): Project {
+  const p = buildRaw(s);
+  return { ...p, completeness: computeCompleteness(p) };
 }
 
-function build(s: Spec): Project {
+function buildRaw(s: Spec): Project {
   const base = {
     address: s.address ? known(s.address, [src(`${s.slug}/overview`)]) : unknown<string>(),
     reraNumbers: s.rera ? known(s.rera, [src(`${s.slug}/rera`)]) : unknown<string[]>(),
@@ -123,7 +122,7 @@ function build(s: Spec): Project {
     regulatorySearches: s.regulatorySearches ?? [], // none = "not yet checked"
     documents: s.documents ?? [],
     reviewFlags: s.reviewFlags ?? [],
-    completeness: completeness(base),
+    completeness: 0, // computed below with the shared rule
     lastCheckedAt: CHECKED,
     isSample: true,
     published: s.published ?? true,

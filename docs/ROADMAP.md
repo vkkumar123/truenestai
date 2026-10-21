@@ -17,22 +17,22 @@ Each milestone is a small vertical slice. **Done** means: acceptance criteria me
 | Later | Bengaluru Phases 2–4 | boundary approvals |
 
 ## M0 — Foundation
-- [ ] `CLAUDE.md`, `AGENTS.md`, `.claude/agents/*` with ownership map (`AGENT_WORKFLOW.md`).
-- [ ] Docs: PRODUCT_SPEC, ARCHITECTURE, ROADMAP, DECISIONS, MCP_REQUESTS, DATA_SOURCE_POLICY, SECURITY_PRIVACY, DATA_MODEL.
-- [ ] Domain contract `src/domain/types.ts` compiles; `.env.example` lists vars with no values.
-- [ ] `npm run check` and `npm run build` pass on the scaffold.
+- [x] `CLAUDE.md`, `AGENTS.md`, `.claude/agents/*` with ownership map (`AGENT_WORKFLOW.md`).
+- [x] Docs: PRODUCT_SPEC, ARCHITECTURE, ROADMAP, DECISIONS, MCP_REQUESTS, DATA_SOURCE_POLICY, SECURITY_PRIVACY, DATA_MODEL.
+- [x] Domain contract `src/domain/types.ts` compiles; `.env.example` lists vars with no values.
+- [x] `npm run check` and `npm run build` pass on the scaffold.
 
-## M1 — First buyer journey on fixtures
+## M1 — First buyer journey on fixtures — **done 2026-10-21** (review PASS, see REVIEW_LOG)
 Journeys J1–J7 from `PRODUCT_SPEC.md`.
-- [ ] Fixture repositories (default mode) with fictional `SAMPLE` projects (≥ 6 Lane A, ≥ 3 Lane B) across North Bengaluru localities from `src/config/markets/`; all `isSample: true`, `example.com/.org` URLs.
-- [ ] **Browse:** list with locality/BHK/status/lane filters; sample badge and lane badge on every card.
-- [ ] **Detail:** every `FactValue` shows sources + verification; unknowns render neutrally; RERA ≠ title disclaimer visible.
-- [ ] **Compare:** up to 4 items; a 5th is refused with a message; unknown cells neutral.
-- [ ] **Lane B:** "Unverified" label, source, canonical URL, discovered/last-seen dates, limitations, Request verification CTA.
-- [ ] **Lead capture:** zod-validated; rejected without `contactConsent`; marketing consent separate and unticked; consent version and retention stored; no personal data before submit.
-- [ ] **Admin:** `/admin` requires the dev credential in fixture mode; credential login disabled when `NODE_ENV=production` (unit-tested); queue lists leads; status changes persist for the process.
-- [ ] Tests: unit (repositories, lead validation, consent, admin guard, compare limit) and e2e (J1–J7).
-- [ ] No secrets, no real data; reviewer PASS.
+- [x] Fixture repositories (default mode) with fictional `SAMPLE` projects (≥ 6 Lane A, ≥ 3 Lane B) across North Bengaluru localities from `src/config/markets/`; all `isSample: true`, `example.com/.org` URLs.
+- [x] **Browse:** list with locality/BHK/status/lane filters; sample badge and lane badge on every card.
+- [x] **Detail:** every `FactValue` shows sources + verification; unknowns render neutrally; RERA ≠ title disclaimer visible.
+- [x] **Compare:** up to 4 items; a 5th is refused with a message; unknown cells neutral.
+- [x] **Lane B:** "Unverified" label, source, canonical URL, discovered/last-seen dates, limitations, Request verification CTA.
+- [x] **Lead capture:** zod-validated; rejected without `contactConsent`; marketing consent separate and unticked; consent version and retention stored; no personal data before submit.
+- [x] **Admin:** `/admin` requires the dev credential in fixture mode; credential login disabled when `NODE_ENV=production` (unit-tested); queue lists leads; status changes persist for the process.
+- [x] Tests: unit (repositories, lead validation, consent, admin guard, compare limit) and e2e (J1–J7).
+- [x] No secrets, no real data; reviewer PASS.
 
 ## M2 — Supabase persistence + Auth live — **owner: R2, R7**
 - [ ] Migrations for projects, facts/sources, external listings, leads, consent, source registry, staff roles.
@@ -40,6 +40,7 @@ Journeys J1–J7 from `PRODUCT_SPEC.md`.
 - [ ] Supabase repositories pass the same contract tests as fixtures.
 - [ ] Staff login via Supabase Auth; dev credential path unused in supabase mode.
 - [ ] Service-role key server-only (bundle check in CI).
+- [ ] Carried from M1 review: advisor lead-assignment scoping (M3), Supabase session refresh in proxy (M6), dev-login throttle (L2), `is_published_project` RPC exposure (L9), Lane B matching under `lane=external` (N1), developer-name text search parity (N2), per-contact rate-limit keys (N3).
 
 ## M3 — Manual research tooling for staff
 - [ ] Admin forms to create or edit a project and add facts, each requiring ≥ 1 `SourceRef` (URL or document, observed date).

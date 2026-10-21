@@ -5,6 +5,7 @@ import Link from "next/link";
 import { CheckCircle2 } from "lucide-react";
 import type { LeadRequestType } from "@/domain/types";
 import { CONSENT_COPY, CONSENT_TEXT_VERSION } from "@/leads/consent";
+import { REQUEST_TYPE_LABELS } from "@/leads/labels";
 import { submitLeadAction } from "@/server/actions/leads";
 import type { SubmitLeadState } from "@/server/actions/types";
 import { Alert, AlertTitle } from "@/components/ui/alert";
@@ -65,11 +66,8 @@ export function LeadForm(props: LeadFormProps) {
         </p>
         <div>
           <p className="font-medium">What happens next</p>
-          <ul className="mt-1 list-disc space-y-1 pl-5">
-            <li>A TrueNest advisor will review your request and contact you using the channel you chose.</li>
-            <li>For verification requests, we research the property and record each fact with its source before publishing.</li>
-            <li>We never share your details with a developer without asking you first.</li>
-          </ul>
+          <p className="mt-1">{CONSENT_COPY.afterSubmit}</p>
+          <p className="mt-1">For verification requests, we research the property and record each fact with its source before publishing.</p>
         </div>
         <p className="text-muted-foreground">{CONSENT_COPY.withdrawal} Quote your reference when you contact us.</p>
         <Link href="/projects" className="text-sm">
@@ -115,8 +113,8 @@ export function LeadForm(props: LeadFormProps) {
         <legend className="text-sm font-medium">What do you need?</legend>
         {(
           [
-            { v: "verification", label: "Request verification", help: "Ask TrueNest to research and verify this property." },
-            { v: "buyer_assistance", label: "Buyer assistance", help: "Talk to an advisor about your search or a shortlist." },
+            { v: "verification", label: REQUEST_TYPE_LABELS.verification, help: "Ask TrueNest to research and verify this property." },
+            { v: "buyer_assistance", label: REQUEST_TYPE_LABELS.buyer_assistance, help: "Talk to an advisor about your search or a shortlist." },
           ] as const
         ).map((o) => (
           <label key={o.v} className="flex cursor-pointer items-start gap-3 rounded-md border border-border bg-surface p-3 has-[:checked]:border-primary">

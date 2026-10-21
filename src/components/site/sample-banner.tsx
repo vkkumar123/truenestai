@@ -1,14 +1,13 @@
 import { cacheLife } from "next/cache";
 import { FlaskConical } from "lucide-react";
-import { searchProperties } from "@/server/services/search";
+import { hasSampleData } from "@/server/services/projects";
 
-/** True when any record currently served is sample (fictional) data. */
+/** True when the data currently served contains sample (fictional) records. */
 async function sampleDataInUse(): Promise<boolean> {
   "use cache";
   cacheLife("hours");
   try {
-    const r = await searchProperties({ limit: 50 });
-    return r.researched.some((p) => p.isSample) || r.external.some((l) => l.isSample);
+    return await hasSampleData();
   } catch {
     return false;
   }

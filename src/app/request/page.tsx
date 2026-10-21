@@ -1,12 +1,12 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
 import type { LeadRequestType } from "@/domain/types";
+import { BUDGET_BAND_LABELS } from "@/leads/labels";
 import { BUDGET_BANDS } from "@/leads/validation";
 import { getRequestSubject } from "@/server/services/projects";
 import { Alert, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { LeadForm } from "@/components/lead/lead-form";
-import { BUDGET_BAND_LABEL } from "@/components/property/format";
 import { EXTERNAL_LABEL } from "@/components/property/external-card";
 
 export const metadata: Metadata = {
@@ -87,7 +87,7 @@ async function RequestContent({ searchParams }: { searchParams: PageProps<"/requ
         externalListingId={isListing ? subject.id : null}
         landingPath={landingPath}
         utm={{ utmSource: attr(first(sp.utm_source)), utmMedium: attr(first(sp.utm_medium)), utmCampaign: attr(first(sp.utm_campaign)) }}
-        budgetBands={BUDGET_BANDS.map((b) => ({ value: b, label: BUDGET_BAND_LABEL[b] ?? b }))}
+        budgetBands={BUDGET_BANDS.map((b) => ({ value: b, label: BUDGET_BAND_LABELS[b] }))}
       />
     </div>
   );

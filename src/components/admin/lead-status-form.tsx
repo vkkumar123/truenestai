@@ -8,7 +8,7 @@ import { Select } from "@/components/ui/select";
 
 const initial: UpdateLeadStatusState = { status: "idle" };
 
-export function LeadStatusForm({ leadId, options }: { leadId: string; options: string[] }) {
+export function LeadStatusForm({ leadId, options }: { leadId: string; options: { value: string; label: string }[] }) {
   const [state, formAction, pending] = useActionState(updateLeadStatusAction, initial);
   if (!options.length) return <span className="text-xs text-muted-foreground">No further changes</span>;
   const selectId = `status-${leadId}`;
@@ -18,10 +18,10 @@ export function LeadStatusForm({ leadId, options }: { leadId: string; options: s
       <label htmlFor={selectId} className="sr-only">
         New status
       </label>
-      <Select id={selectId} name="status" defaultValue={options[0]} className="h-8 w-auto text-xs">
+      <Select id={selectId} name="status" defaultValue={options[0].value} className="h-8 w-auto text-xs">
         {options.map((o) => (
-          <option key={o} value={o}>
-            {o === "withdrawn" ? "withdrawn (erases personal data)" : o}
+          <option key={o.value} value={o.value}>
+            {o.value === "withdrawn" ? `${o.label} (erases personal data)` : o.label}
           </option>
         ))}
       </Select>

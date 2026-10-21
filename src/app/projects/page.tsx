@@ -8,7 +8,10 @@ import { searchProperties } from "@/server/services/search";
 import { Alert, AlertTitle } from "@/components/ui/alert";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/components/ui/cn";
-import { CompareToggle, MAX_COMPARE_UI, withCompare } from "@/components/property/compare-toggle";
+import { MAX_COMPARE } from "@/domain/limits";
+import { BHK_OPTIONS, CONSTRUCTION_STATUS_LABELS, CONSTRUCTION_STATUS_OPTIONS, SEARCH_LANES, type SearchLane } from "@/domain/search-options";
+import { CompareToggle } from "@/components/property/compare-toggle";
+import { withCompare } from "@/components/property/compare-url";
 import { EXTERNAL_LABEL, ExternalListingCard } from "@/components/property/external-card";
 import { ProjectCard } from "@/components/property/project-card";
 import { LocalitySearch } from "@/components/site/locality-search";
@@ -24,7 +27,7 @@ function first(v: string | string[] | undefined): string {
 }
 
 function parseCompare(raw: string): string[] {
-  return [...new Set(raw.split(",").map((s) => s.trim()).filter(Boolean))].slice(0, MAX_COMPARE_UI);
+  return [...new Set(raw.split(",").map((s) => s.trim()).filter(Boolean))].slice(0, MAX_COMPARE);
 }
 
 export default function ProjectsPage({ searchParams }: PageProps<"/projects">) {
@@ -43,33 +46,67 @@ async function Results({ searchParams }: { searchParams: PageProps<"/projects">[
   const sp = await searchParams;
   const locality = first(sp.locality);
   const q = first(sp.q).slice(0, 100);
+  const bhkRaw = first(sp.bhk);
+  const bhk = (BHK_OPTIONS as readonly string[]).includes(bhkRaw) ? bhkRaw : "";
+  const statusRaw = first(sp.status);
+  const status = (CONSTRUCTION_STATUS_OPTIONS as readonly string[]).includes(statusRaw) ? (statusRaw as (typeof CONSTRUCTION_STATUS_OPTIONS)[number]) : "";
+  const laneRaw = first(sp.lane);
+  const lane: SearchLane = (SEARCH_LANES as readonly string[]).includes(laneRaw) ? (laneRaw as SearchLane) : "all";
   const selected = parseCompare(first(sp.compare));
-  const query = { locality: locality || undefined, q: q || undefined };
+  // Everything except `compare`, so toggles and "Clear" keep the current filters.
+  const query = {
+    locality: locality || undefined,
+    q: q || undefined,
+    bhk: bhk || undefined,
+    status: status || undefined,
+    lane: lane === "all" ? undefined : lane,
+  };
 
   const localities = listLocalities({ activeOnly: true })
     .map((l) => ({ id: l.id, name: l.name }))
     .sort((a, b) => a.name.localeCompare(b.name));
   const localityName = locality ? getLocality(locality)?.name : undefined;
 
-  const result = await searchProperties({ localityId: locality || undefined, text: q || undefined });
-  const { researched, external, externalErrors } = result;
+  const result = await searchProperties({
+    localityId: locality || undefined,
+    text: q || undefined,
+    bhk: bhk || undefined,
+    status: status || undefined,
+    lane,
+  });
+  const { researched, external, externalErrors, notes } = result;
   const total = researched.length + external.length;
+  const filterText = [bhk ? `${bhk} BHK` : "", status ? CONSTRUCTION_STATUS_LABELS[status] : ""].filter(Boolean).join(", ");
 
   return (
     <div className="space-y-8">
-      <LocalitySearch localities={localities} defaultLocality={localityName ? locality : ""} defaultQuery={q} />
+      <LocalitySearch
+        localities={localities}
+        defaults={{ locality: localityName ? locality : "", q, bhk, status, lane, compare: selected.join(",") }}
+      />
 
       <p className="text-sm text-muted-foreground" aria-live="polite">
         {total} result{total === 1 ? "" : "s"}
         {localityName ? ` in ${localityName}` : locality ? " (unknown locality)" : " across North Bengaluru"}
-        {q ? ` matching “${q}”` : ""}.
+        {q ? ` matching “${q}”` : ""}
+        {filterText ? ` (${filterText})` : ""}.
       </p>
+
+      {notes?.length ? (
+        <Alert tone="info" role="status">
+          <ul className="space-y-1">
+            {notes.map((n) => (
+              <li key={n}>{n}</li>
+            ))}
+          </ul>
+        </Alert>
+      ) : null}
 
       {selected.length ? (
         <div className="sticky top-2 z-10 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-primary/30 bg-surface p-3 shadow-sm">
           <p className="text-sm">
-            {selected.length} of {MAX_COMPARE_UI} selected for comparison
-            {selected.length >= MAX_COMPARE_UI ? " — the maximum. Remove one to add another." : "."}
+            {selected.length} of {MAX_COMPARE} selected for comparison
+            {selected.length >= MAX_COMPARE ? " — the maximum. Remove one to add another." : "."}
           </p>
           <div className="flex gap-2">
             <Link href={withCompare("/projects", query, [])} className={buttonVariants({ variant: "ghost", size: "sm" })}>
@@ -82,13 +119,14 @@ async function Results({ searchParams }: { searchParams: PageProps<"/projects">[
         </div>
       ) : null}
 
+      {lane !== "external" ? (
       <section aria-labelledby="researched-heading" className="space-y-3">
         <div>
           <h2 id="researched-heading" className="text-lg font-semibold">
             Researched by TrueNest
           </h2>
           <p className="text-sm text-muted-foreground">
-            Facts collected with sources and a verification state. Tick up to {MAX_COMPARE_UI} to compare.
+            Facts collected with sources and a verification state. Tick up to {MAX_COMPARE} to compare.
           </p>
         </div>
         {researched.length ? (
@@ -112,8 +150,9 @@ async function Results({ searchParams }: { searchParams: PageProps<"/projects">[
           </Alert>
         )}
       </section>
+      ) : null}
 
-      {external.length || externalErrors?.length ? (
+      {external.length || externalErrors?.length || lane === "external" ? (
         <section aria-labelledby="external-heading" className="space-y-3 rounded-xl border border-dashed border-external/40 bg-external/5 p-4">
           <div>
             <h2 id="external-heading" className="text-lg font-semibold">
@@ -149,6 +188,8 @@ async function Results({ searchParams }: { searchParams: PageProps<"/projects">[
                 </li>
               ))}
             </ul>
+          ) : !externalErrors?.length ? (
+            <p className="text-sm text-muted-foreground">No externally discovered listings match this search.</p>
           ) : null}
         </section>
       ) : null}

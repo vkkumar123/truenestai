@@ -2,7 +2,8 @@ import type { ReactNode } from "react";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { AlertTriangle, ExternalLink, FileText, Scale } from "lucide-react";
+import { AlertTriangle, FileText, Scale } from "lucide-react";
+import { formatInr } from "@/domain/format";
 import type { Project, RegulatoryRecord, RegulatorySearch } from "@/domain/types";
 import { getLocality } from "@/config/markets";
 import { describeComplaintSearch, COMPLAINT_SCOPE_CAVEAT, REVIEW_FLAG_TEXT, reviewFlagsFor } from "@/research/evidence";
@@ -15,12 +16,12 @@ import { FactRow } from "@/components/property/fact";
 import {
   CONSTRUCTION_STATUS_LABEL,
   formatDate,
-  formatInr,
   formatPercent,
   formatRange,
   NOT_YET_FOUND,
   RECORD_KIND_LABEL,
 } from "@/components/property/format";
+import { SafeExternalLink } from "@/components/property/safe-link";
 import { SourcesList } from "@/components/property/sources-list";
 import { UnknownBadge, VerificationBadge } from "@/components/property/verification-badge";
 
@@ -222,11 +223,7 @@ function RegulatorySection({ project }: { project: Project }) {
               {g.searches.map((s) => (
                 <li key={`${s.sourceId}-${s.searchedAt}`}>
                   {describeSearch(s)}{" "}
-                  {s.url ? (
-                    <a href={s.url} target="_blank" rel="noopener noreferrer nofollow" className="text-primary underline">
-                      Search source<span className="sr-only"> (opens in a new tab)</span>
-                    </a>
-                  ) : null}
+                  {s.url ? <SafeExternalLink url={s.url}>Search source</SafeExternalLink> : null}
                 </li>
               ))}
             </ul>
@@ -296,10 +293,9 @@ function DocumentsList({ project }: { project: Project }) {
                   {d.source.url ? (
                     <>
                       {" · "}
-                      <a href={d.source.url} target="_blank" rel="noopener noreferrer nofollow" className="inline-flex items-center gap-1 text-primary underline">
-                        Open <ExternalLink aria-hidden="true" className="size-3" />
-                        <span className="sr-only">version {d.version} of {d.title} (opens in a new tab)</span>
-                      </a>
+                      <SafeExternalLink url={d.source.url} srLabel={`version ${d.version} of ${d.title} (opens in a new tab)`}>
+                        Open
+                      </SafeExternalLink>
                     </>
                   ) : null}
                   <div>

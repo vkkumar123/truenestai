@@ -1,6 +1,6 @@
-import { ExternalLink } from "lucide-react";
 import type { SourceRef } from "@/domain/types";
 import { formatDate } from "./format";
+import { SafeExternalLink } from "./safe-link";
 
 /** Provenance list: source id, link, observed date and document date for each source. */
 export function SourcesList({ sources, label = "Sources" }: { sources: SourceRef[]; label?: string }) {
@@ -19,17 +19,8 @@ export function SourcesList({ sources, label = "Sources" }: { sources: SourceRef
               <span className="font-medium">Source:</span> <code className="font-mono">{s.sourceId}</code>
             </p>
             {s.url ? (
-              <p className="break-all">
-                <a
-                  href={s.url}
-                  target="_blank"
-                  rel="noopener noreferrer nofollow"
-                  className="inline-flex items-center gap-1 text-primary underline"
-                >
-                  {s.url}
-                  <ExternalLink aria-hidden="true" className="size-3 shrink-0" />
-                  <span className="sr-only">(opens in a new tab)</span>
-                </a>
+              <p>
+                <SafeExternalLink url={s.url} />
               </p>
             ) : (
               <p className="text-muted-foreground">No link available</p>

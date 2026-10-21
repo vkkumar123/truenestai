@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ExternalLink, Globe } from "lucide-react";
+import { Globe } from "lucide-react";
 import type { ExternalListing } from "@/domain/types";
 import { getLocality } from "@/config/markets";
 import { getSource } from "@/discovery/registry";
@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { buttonVariants } from "@/components/ui/button";
 import { formatDate } from "./format";
+import { SafeExternalLink } from "./safe-link";
 
 export const EXTERNAL_LABEL = "Externally discovered — not verified by TrueNest";
 
@@ -26,16 +27,7 @@ export function ExternalListingCard({ listing }: { listing: ExternalListing }) {
         </p>
       </CardHeader>
       <CardContent className="flex-1 space-y-2 text-sm">
-        <a
-          href={listing.canonicalUrl}
-          target="_blank"
-          rel="noopener noreferrer nofollow"
-          className="inline-flex items-center gap-1 break-all text-primary underline"
-        >
-          {listing.canonicalUrl}
-          <ExternalLink aria-hidden="true" className="size-3 shrink-0" />
-          <span className="sr-only">(opens the source site in a new tab)</span>
-        </a>
+        <SafeExternalLink url={listing.canonicalUrl} srLabel="(opens the source site in a new tab)" />
         <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground">
           <dt>Discovered</dt>
           <dd>{formatDate(listing.discoveredAt)}</dd>

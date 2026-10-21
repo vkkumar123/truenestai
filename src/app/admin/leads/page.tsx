@@ -3,27 +3,119 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { connection } from "next/server";
-import type { LeadStatus } from "@/domain/types";
+import type { LeadRequestType, LeadStatus } from "@/domain/types";
+import { LEAD_STATUS_LABELS, REQUEST_TYPE_LABELS } from "@/leads/labels";
 import { LEAD_STATUS_TRANSITIONS } from "@/leads/retention";
 import { adminLogoutAction } from "@/server/actions/admin";
 import { getStaffSession, isStaffAuthError } from "@/server/auth";
-import { listLeads } from "@/server/services/leads";
+import { listLeads, type StaffLeadView } from "@/server/services/leads";
 import { Alert, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/components/ui/cn";
 import { LeadStatusForm } from "@/components/admin/lead-status-form";
+import { EXTERNAL_LABEL } from "@/components/property/external-card";
 import { formatDate } from "@/components/property/format";
+import { SafeExternalLink } from "@/components/property/safe-link";
 
 export const metadata: Metadata = { title: "Leads", robots: { index: false, follow: false } };
 
 const STATUSES: LeadStatus[] = ["new", "contacted", "qualified", "closed", "withdrawn"];
+const REQUEST_TYPES: LeadRequestType[] = ["verification", "buyer_assistance"];
 
 export default function AdminLeadsPage({ searchParams }: PageProps<"/admin/leads">) {
   return (
-    <Suspense fallback={<div aria-busy="true" className="h-96 animate-pulse rounded-lg bg-muted"><span className="sr-only">Loading…</span></div>}>
+    <Suspense
+      fallback={
+        <div aria-busy="true" className="h-96 animate-pulse rounded-lg bg-muted">
+          <span className="sr-only">Loading…</span>
+        </div>
+      }
+    >
       <LeadsContent searchParams={searchParams} />
     </Suspense>
+  );
+}
+
+function filterHref(f: { status?: LeadStatus; requestType?: LeadRequestType }): string {
+  const sp = new URLSearchParams();
+  if (f.status) sp.set("status", f.status);
+  if (f.requestType) sp.set("requestType", f.requestType);
+  const s = sp.toString();
+  return s ? `/admin/leads?${s}` : "/admin/leads";
+}
+
+function FilterPills<T extends string>({
+  label,
+  options,
+  current,
+  href,
+  text,
+}: {
+  label: string;
+  options: T[];
+  current: T | undefined;
+  href: (v: T | undefined) => string;
+  text: (v: T) => string;
+}) {
+  return (
+    <nav aria-label={label}>
+      <ul className="flex flex-wrap items-center gap-1.5 text-sm">
+        <li className="mr-1 text-xs font-medium text-muted-foreground">{label}:</li>
+        {[undefined, ...options].map((v) => (
+          <li key={v ?? "all"}>
+            <Link
+              href={href(v)}
+              aria-current={current === v ? "page" : undefined}
+              className={cn(
+                "rounded-full border px-3 py-1",
+                current === v ? "border-primary bg-primary text-primary-foreground" : "border-border bg-surface hover:bg-muted",
+              )}
+            >
+              {v ? text(v) : "All"}
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </nav>
+  );
+}
+
+function Subject({ subject }: { subject: StaffLeadView["subject"] }) {
+  if (!subject) return <span className="text-muted-foreground">General request</span>;
+  if (subject.kind === "project") {
+    return (
+      <div className="space-y-0.5">
+        <Badge tone="info">Researched project</Badge>
+        <p>
+          {subject.slug && subject.available ? (
+            <Link href={`/projects/${subject.slug}`} className="text-primary underline">
+              {subject.name ?? subject.id}
+            </Link>
+          ) : (
+            <span>{subject.name ?? <code className="font-mono">{subject.id}</code>}</span>
+          )}
+        </p>
+        {!subject.available ? <p className="text-muted-foreground">No longer published</p> : null}
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-0.5">
+      <Badge className="border-external/40 bg-external/10 text-external">{EXTERNAL_LABEL}</Badge>
+      <p className="font-medium">{subject.title ?? <code className="font-mono">{subject.id}</code>}</p>
+      {subject.available ? (
+        <>
+          <p className="text-muted-foreground">Source: {subject.sourceName ?? subject.sourceId ?? "Not recorded"}</p>
+          {subject.canonicalUrl ? <SafeExternalLink url={subject.canonicalUrl} srLabel="(opens the source site in a new tab)" /> : null}
+          <p className="text-muted-foreground">
+            Discovered {formatDate(subject.discoveredAt)} · Last seen {subject.lastSeenAt ? formatDate(subject.lastSeenAt) : "not recorded"}
+          </p>
+        </>
+      ) : (
+        <p className="text-muted-foreground">Listing record no longer available</p>
+      )}
+    </div>
   );
 }
 
@@ -35,10 +127,13 @@ async function LeadsContent({ searchParams }: { searchParams: PageProps<"/admin/
   const sp = await searchParams;
   const rawStatus = typeof sp.status === "string" ? sp.status : "";
   const status = (STATUSES as string[]).includes(rawStatus) ? (rawStatus as LeadStatus) : undefined;
+  const rawType = typeof sp.requestType === "string" ? sp.requestType : "";
+  const requestType = (REQUEST_TYPES as string[]).includes(rawType) ? (rawType as LeadRequestType) : undefined;
+  const isAdmin = session.role === "admin";
 
-  let leads;
+  let leads: StaffLeadView[];
   try {
-    leads = await listLeads({ status, limit: 200 });
+    leads = await listLeads({ status, requestType, limit: 200 });
   } catch (e) {
     if (isStaffAuthError(e)) redirect("/admin/login?next=%2Fadmin%2Fleads");
     throw e;
@@ -60,36 +155,38 @@ async function LeadsContent({ searchParams }: { searchParams: PageProps<"/admin/
         </form>
       </div>
 
-      <nav aria-label="Filter by status">
-        <ul className="flex flex-wrap gap-1.5 text-sm">
-          {[{ v: undefined, label: "All" }, ...STATUSES.map((s) => ({ v: s, label: s }))].map((o) => (
-            <li key={o.label}>
-              <Link
-                href={o.v ? `/admin/leads?status=${o.v}` : "/admin/leads"}
-                aria-current={status === o.v ? "page" : undefined}
-                className={cn(
-                  "rounded-full border px-3 py-1 capitalize",
-                  status === o.v ? "border-primary bg-primary text-primary-foreground" : "border-border bg-surface hover:bg-muted",
-                )}
-              >
-                {o.label}
-              </Link>
-            </li>
-          ))}
-        </ul>
-      </nav>
+      <div className="space-y-2">
+        <FilterPills
+          label="Status"
+          options={STATUSES}
+          current={status}
+          href={(v) => filterHref({ status: v, requestType })}
+          text={(v) => LEAD_STATUS_LABELS[v]}
+        />
+        <FilterPills
+          label="Request type"
+          options={REQUEST_TYPES}
+          current={requestType}
+          href={(v) => filterHref({ status, requestType: v })}
+          text={(v) => REQUEST_TYPE_LABELS[v]}
+        />
+      </div>
+
+      {!isAdmin ? (
+        <p className="text-xs text-muted-foreground">Only an admin can withdraw and erase a lead.</p>
+      ) : null}
 
       {leads.length === 0 ? (
         <Alert>
-          <AlertTitle>No requests{status ? ` with status “${status}”` : ""}</AlertTitle>
+          <AlertTitle>No requests match these filters</AlertTitle>
           <p>New buyer requests appear here once submitted with contact consent.</p>
         </Alert>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-border bg-surface" role="region" aria-label="Buyer requests" tabIndex={0}>
-          <table className="w-full min-w-[60rem] text-left text-sm">
+          <table className="w-full min-w-[64rem] text-left text-sm">
             <thead className="border-b border-border text-muted-foreground">
               <tr>
-                {["Created", "Type", "Contact", "Property", "Status", "Tier", "Retain until", "Change status"].map((h) => (
+                {["Created", "Type", "Contact", "About", "Status", "Tier", "Retain until", "Change status"].map((h) => (
                   <th key={h} scope="col" className="p-3 font-medium">
                     {h}
                   </th>
@@ -99,8 +196,8 @@ async function LeadsContent({ searchParams }: { searchParams: PageProps<"/admin/
             <tbody>
               {leads.map((l) => (
                 <tr key={l.id} className="border-b border-border align-top last:border-b-0">
-                  <td className="p-3 whitespace-nowrap">{formatDate(l.createdAt)}</td>
-                  <td className="p-3">{l.requestType === "verification" ? "Verification" : "Buyer assistance"}</td>
+                  <td className="whitespace-nowrap p-3">{formatDate(l.createdAt)}</td>
+                  <td className="p-3">{REQUEST_TYPE_LABELS[l.requestType]}</td>
                   <td className="p-3">
                     <p className="font-medium">{l.name}</p>
                     <p className="text-xs text-muted-foreground">
@@ -108,13 +205,17 @@ async function LeadsContent({ searchParams }: { searchParams: PageProps<"/admin/
                       {l.email ? ` · ${l.email}` : ""}
                       {l.phone ? ` · ${l.phone}` : ""}
                     </p>
-                    {l.consent.marketingConsent ? <Badge tone="info" className="mt-1">Marketing opt-in</Badge> : null}
+                    {l.consent.marketingConsent ? (
+                      <Badge tone="info" className="mt-1">
+                        Marketing opt-in
+                      </Badge>
+                    ) : null}
                   </td>
-                  <td className="p-3 text-xs">
-                    {l.projectId ? <>Project <code className="font-mono">{l.projectId}</code></> : l.externalListingId ? <>External listing <code className="font-mono">{l.externalListingId}</code></> : "General"}
+                  <td className="max-w-72 p-3 text-xs">
+                    <Subject subject={l.subject} />
                   </td>
-                  <td className="p-3 capitalize">
-                    <Badge tone={l.status === "new" ? "info" : l.status === "withdrawn" ? "neutral" : "outline"}>{l.status}</Badge>
+                  <td className="p-3">
+                    <Badge tone={l.status === "new" ? "info" : l.status === "withdrawn" ? "neutral" : "outline"}>{LEAD_STATUS_LABELS[l.status]}</Badge>
                   </td>
                   <td className="p-3 capitalize">
                     {l.qualification ? (
@@ -125,9 +226,14 @@ async function LeadsContent({ searchParams }: { searchParams: PageProps<"/admin/
                       <span className="text-muted-foreground">Not scored</span>
                     )}
                   </td>
-                  <td className="p-3 whitespace-nowrap">{formatDate(l.retentionUntil)}</td>
+                  <td className="whitespace-nowrap p-3">{formatDate(l.retentionUntil)}</td>
                   <td className="p-3">
-                    <LeadStatusForm leadId={l.id} options={[...LEAD_STATUS_TRANSITIONS[l.status]]} />
+                    <LeadStatusForm
+                      leadId={l.id}
+                      options={LEAD_STATUS_TRANSITIONS[l.status]
+                        .filter((s) => isAdmin || s !== "withdrawn")
+                        .map((s) => ({ value: s, label: LEAD_STATUS_LABELS[s] }))}
+                    />
                   </td>
                 </tr>
               ))}

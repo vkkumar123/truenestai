@@ -1,3 +1,4 @@
+import { CONSTRUCTION_STATUS_LABELS } from "@/domain/search-options";
 import type { ConstructionStatus, RegulatoryRecord, VerificationState } from "@/domain/types";
 
 /** Shown wherever a fact has not been found. Never "None" or "No". */
@@ -19,12 +20,9 @@ export const VERIFICATION_HELP: Record<VerificationState, string> = {
   requires_professional_review: "Must be reviewed by a qualified professional (e.g. a lawyer).",
 };
 
+/** Includes "unknown", which is shown as "Not yet found" (never as a status). */
 export const CONSTRUCTION_STATUS_LABEL: Record<ConstructionStatus, string> = {
-  pre_launch: "Pre-launch",
-  under_construction: "Under construction",
-  ready_to_move: "Ready to move",
-  completed: "Completed",
-  stalled: "Stalled",
+  ...CONSTRUCTION_STATUS_LABELS,
   unknown: NOT_YET_FOUND,
 };
 
@@ -47,12 +45,6 @@ export function formatDate(iso: string | null | undefined): string {
   return month ? `${Number(m[3])} ${month} ${m[1]}` : iso;
 }
 
-export function formatInr(n: number): string {
-  if (n >= 1e7) return `₹${(n / 1e7).toFixed(2)} Cr`;
-  if (n >= 1e5) return `₹${(n / 1e5).toFixed(1)} L`;
-  return `₹${n.toLocaleString("en-IN")}`;
-}
-
 export function formatRange(r: { min: number; max: number }, fmt: (n: number) => string): string {
   return r.min === r.max ? fmt(r.min) : `${fmt(r.min)} – ${fmt(r.max)}`;
 }
@@ -61,11 +53,16 @@ export function formatPercent(fraction: number): string {
   return `${Math.round(Math.max(0, Math.min(1, fraction)) * 100)}%`;
 }
 
-export const BUDGET_BAND_LABEL: Record<string, string> = {
-  under_50l: "Under ₹50 L",
-  "50l_1cr": "₹50 L – ₹1 Cr",
-  "1cr_1_5cr": "₹1 Cr – ₹1.5 Cr",
-  "1_5cr_2cr": "₹1.5 Cr – ₹2 Cr",
-  "2cr_3cr": "₹2 Cr – ₹3 Cr",
-  above_3cr: "Above ₹3 Cr",
-};
+/**
+ * Returns the URL only when it is a well-formed https URL, so source/listing data can never
+ * produce javascript:, data: or plain-http links. Callers render plain text when this is null.
+ */
+export function safeHttpsHref(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    return u.protocol === "https:" && !u.username && !u.password ? u.href : null;
+  } catch {
+    return null;
+  }
+}

@@ -11,6 +11,7 @@ const STAMP = Date.now().toString(36);
 const PROJECT_NAME = `SAMPLE E2E Research Residency ${STAMP}`;
 const DEVELOPER = "SAMPLE Developer E2E";
 const RERA = "SAMPLE-RERA-0901";
+const RERA_CORRECTED = "SAMPLE-RERA-0902";
 const ADDRESS = "SAMPLE Research Road 9, Hebbal (fictional)";
 const SOURCE_URL = "https://example.com/sample/e2e-research";
 
@@ -22,6 +23,8 @@ const ui = {
   /** Fact card on /admin/projects/[id] (Card id="fact-<field>"). */
   fact: (page: Page, field: Field) => page.locator(`#fact-${field}`),
   publishing: (page: Page) => page.getByRole("region", { name: "Publishing" }),
+  /** The fact card's header (value, verification badge, sources), excluding the forms' <option>s. */
+  factHeader: (page: Page, field: Field) => page.locator(`#fact-${field} > :first-child`),
   history: (page: Page) => page.getByRole("region", { name: "Change history" }),
 };
 
@@ -39,7 +42,8 @@ async function saveFact(page: Page, field: Field, fill: (value: Locator) => Prom
   await card.getByText("Edit fact and sources").click();
   await card.getByRole("radio", { name: /^Known/ }).check();
   await fill(card.locator(`#${field}-value`));
-  await card.locator(`#${field}-s0-id`).fill("sample-e2e-source");
+  // Source is a select of registry sources ("sample-feed — SAMPLE Feed (fictional fixture)").
+  await card.locator(`#${field}-s0-id`).selectOption("sample-feed");
   await card.locator(`#${field}-s0-url`).fill(SOURCE_URL);
   // Observed-at defaults to request time; exercise the client-side "Now" button explicitly.
   const observed = card.locator(`#${field}-s0-obs`);
@@ -81,7 +85,9 @@ test.describe.serial("M3 research workflow (admin)", () => {
     await page.getByRole("link", { name: "New project" }).click();
     await expect(page).toHaveURL(/\/admin\/projects\/new$/);
     await page.getByLabel("Project name").fill(PROJECT_NAME);
-    await page.getByLabel("Developer name").fill(DEVELOPER);
+    // Default is "New developer"; existing developers are never matched by name.
+    await expect(page.getByLabel("Developer", { exact: true })).toHaveValue("");
+    await page.getByLabel("New developer name").fill(DEVELOPER);
     await page.getByLabel("Locality").selectOption("hebbal");
     await page.getByRole("button", { name: /create project/i }).click();
     // Client-side router.push after the action succeeds.
@@ -117,7 +123,7 @@ test.describe.serial("M3 research workflow (admin)", () => {
     for (const [field, text] of [["reraNumbers", RERA], ["address", ADDRESS], ["constructionStatus", "Under construction"]] as const) {
       const card = ui.fact(page, field);
       await expect(card.getByText(text).first()).toBeVisible();
-      await expect(card.getByText("Unverified").first()).toBeVisible();
+      await expect(ui.factHeader(page, field).getByText("Unverified")).toBeVisible();
       await expect(card.locator(`a[href="${SOURCE_URL}"]`).first()).toBeAttached();
     }
 
@@ -132,13 +138,36 @@ test.describe.serial("M3 research workflow (admin)", () => {
     await expectNotPublic(page);
   });
 
+  test("stale tab: verifying a fact edited in another tab shows a conflict and changes nothing", async ({ page }) => {
+    test.skip(!projectUrl, "depends on the create test");
+    await signIn(page, E2E_ADMIN_DEV_PASSWORD);
+    await page.goto(projectUrl); // tab A: holds the current RERA version
+    const pageB = await page.context().newPage();
+    await pageB.goto(projectUrl); // tab B: re-saves RERA (new observed time -> new fact version)
+    await saveFact(pageB, "reraNumbers", (v) => v.fill(RERA));
+    await pageB.close();
+
+    const cardA = ui.fact(page, "reraNumbers");
+    await cardA.getByLabel("Change verification to").selectOption({ label: "Reviewed" });
+    await cardA.getByRole("button", { name: "Update verification" }).click();
+    await expectStillSignedIn(page, "stale verification");
+    await expect(cardA.getByRole("alert").filter({ hasText: /changed since you loaded it/i })).toBeVisible();
+    await expect(cardA.getByRole("link", { name: "Reload this page" })).toBeVisible();
+
+    await page.reload();
+    await expect(ui.factHeader(page, "reraNumbers").getByText("Unverified")).toBeVisible();
+    await expect(ui.factHeader(page, "reraNumbers").getByText("Reviewed")).toHaveCount(0);
+    await expect(ui.history(page).getByRole("row").filter({ hasText: /verification changed/ })).toHaveCount(0);
+    await expect(page.getByText("Unpublished").first()).toBeVisible();
+  });
+
   test("admin marks RERA reviewed, publishes, and the project is public with per-fact badges", async ({ page }) => {
     test.skip(!projectUrl, "depends on the create test");
     await signIn(page, E2E_ADMIN_DEV_PASSWORD);
     await page.goto(projectUrl);
     await setVerification(page, "reraNumbers", "Reviewed");
     await page.reload();
-    await expect(ui.fact(page, "reraNumbers").getByText("Reviewed").first()).toBeVisible();
+    await expect(ui.factHeader(page, "reraNumbers").getByText("Reviewed")).toBeVisible();
     await expect(ui.publishing(page).getByText("Ready to publish")).toBeVisible();
 
     await ui.publishing(page).getByRole("button", { name: "Publish" }).click();
@@ -169,11 +198,36 @@ test.describe.serial("M3 research workflow (admin)", () => {
     await expect(history).toBeVisible();
     const rows = history.getByRole("row");
     await expect(rows.filter({ hasText: /created/ })).toHaveCount(1);
-    await expect(rows.filter({ hasText: /fact set/ })).toHaveCount(3);
+    await expect(rows.filter({ hasText: /fact set/ })).toHaveCount(4); // 3 facts + the stale-tab re-save
     await expect(rows.filter({ hasText: /verification changed/ }).filter({ hasText: "Unverified → Reviewed" })).toHaveCount(1);
     await expect(rows.filter({ hasText: /^(?!.*unpublished).*published/ })).toHaveCount(1);
     await expect(rows.filter({ hasText: "RERA registration numbers" }).first()).toBeVisible();
     await expect(rows.filter({ hasText: "admin" }).first()).toBeVisible();
+  });
+
+  test("re-editing RERA on a published project auto-unpublishes it with a notice", async ({ page }) => {
+    test.skip(!projectUrl, "depends on the create test");
+    await signIn(page, E2E_ADMIN_DEV_PASSWORD);
+    await page.goto(projectUrl);
+    await expect(page.getByText("Published").first()).toBeVisible();
+
+    const card = ui.fact(page, "reraNumbers");
+    await card.getByText("Edit fact and sources").click();
+    await card.locator("#reraNumbers-value").fill(RERA_CORRECTED);
+    await card.locator("#reraNumbers-s0-id").selectOption("sample-feed");
+    await card.getByRole("button", { name: "Now" }).first().click();
+    await card.getByRole("button", { name: "Save fact" }).click();
+    await expectStillSignedIn(page, "RERA re-edit");
+    await expect(card.getByRole("status").filter({ hasText: /fact saved as unverified/i })).toBeVisible();
+    const notice = card.getByRole("alert").filter({ hasText: "Project unpublished" });
+    await expect(notice).toBeVisible();
+    await expect(notice).toContainText(/no longer meets the publish rules/i);
+
+    await page.reload();
+    await expect(page.getByText("Unpublished").first()).toBeVisible();
+    await expect(page.getByRole("link", { name: "View public page" })).toHaveCount(0);
+    await expect(ui.history(page).getByRole("row").filter({ hasText: "auto: failed readiness after edit" })).toHaveCount(1);
+    await expectNotPublic(page);
   });
 });
 
@@ -196,6 +250,7 @@ test.describe("M3 advisor restrictions", () => {
         const labels = await select.locator("option").allTextContents();
         expect(labels, field).not.toContain("Reviewed");
         expect(labels, field).not.toContain("Source confirmed");
+        expect(labels, field).not.toContain("Unverified"); // resets are admin-only
       }
     }
     // Advisors can still edit facts (always saved as Unverified).

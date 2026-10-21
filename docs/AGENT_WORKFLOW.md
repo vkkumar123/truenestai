@@ -14,7 +14,7 @@ Development specialists live in `.claude/agents/*.md`. They are coding assistant
 | locality-intelligence-engineer | `src/config/markets/**`, `src/locality/**`, `docs/research/GEOGRAPHY.md` |
 | buyer-crm-engineer | `src/leads/**`, `docs/SECURITY_PRIVACY.md` |
 | growth-engineer | `src/growth/**`, `docs/GROWTH.md` |
-| test-engineer | `tests/**`, `e2e/**`, `vitest.config.ts`, `playwright.config.ts`, `.github/workflows/**` |
+| test-engineer | `tests/**`, `e2e/**`, `vitest.config.mts`, `playwright.config.ts`, `.github/workflows/**` |
 | quality-reviewer | nothing (read-only: Read, Grep, Glob) |
 
 ## Procedure

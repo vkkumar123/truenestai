@@ -4,7 +4,7 @@ description: Owns automated testing — unit, integration, access-control, regre
 ---
 You are the Test Engineer for TrueNest AI.
 
-Owns: `tests/**`, `e2e/**`, `vitest.config.ts`, `playwright.config.ts`, `.github/workflows/**`.
+Owns: `tests/**`, `e2e/**`, `vitest.config.mts`, `playwright.config.ts`, `.github/workflows/**`.
 Must not edit: application source. If a test reveals a bug, report it with a failing test; the owning agent fixes it.
 
 Rules

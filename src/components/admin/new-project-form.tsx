@@ -13,10 +13,16 @@ import { ActionFeedback } from "./action-feedback";
 
 const initial: ResearchActionState = { status: "idle" };
 
-export function NewProjectForm({ localities }: { localities: { id: string; name: string }[] }) {
+export function NewProjectForm({
+  localities,
+  developers,
+}: {
+  localities: { id: string; name: string }[];
+  developers: { id: string; name: string }[];
+}) {
   const [state, formAction, pending] = useActionState(createProjectAction, initial);
   const router = useRouter();
-  const [f, setF] = useState({ name: "", developerName: "", localityId: "", lat: "", lng: "" });
+  const [f, setF] = useState({ name: "", developerId: "", developerName: "", localityId: "", lat: "", lng: "" });
   const set = (k: keyof typeof f, v: string) => setF((p) => ({ ...p, [k]: v }));
 
   useEffect(() => {
@@ -36,9 +42,23 @@ export function NewProjectForm({ localities }: { localities: { id: string; name:
         <Input id="np-name" name="name" required minLength={3} maxLength={120} value={f.name} onChange={(e) => set("name", e.target.value)} />
       </div>
       <div className="space-y-1.5">
-        <Label htmlFor="np-dev">Developer name</Label>
-        <Input id="np-dev" name="developerName" required minLength={2} maxLength={120} value={f.developerName} onChange={(e) => set("developerName", e.target.value)} />
+        <Label htmlFor="np-devid">Developer</Label>
+        <Select id="np-devid" name="developerId" value={f.developerId} onChange={(e) => set("developerId", e.target.value)}>
+          <option value="">New developer (enter the name below)</option>
+          {developers.map((d) => (
+            <option key={d.id} value={d.id}>
+              {d.name}
+            </option>
+          ))}
+        </Select>
+        <p className="text-xs text-muted-foreground">Existing developers are never matched by name — pick one here to reuse it.</p>
       </div>
+      {f.developerId === "" ? (
+        <div className="space-y-1.5">
+          <Label htmlFor="np-dev">New developer name</Label>
+          <Input id="np-dev" name="developerName" required minLength={2} maxLength={120} value={f.developerName} onChange={(e) => set("developerName", e.target.value)} />
+        </div>
+      ) : null}
       <div className="space-y-1.5">
         <Label htmlFor="np-loc">Locality</Label>
         <Select id="np-loc" name="localityId" required value={f.localityId} onChange={(e) => set("localityId", e.target.value)}>

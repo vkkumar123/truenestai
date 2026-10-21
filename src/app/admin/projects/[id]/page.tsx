@@ -3,12 +3,13 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { notFound, redirect } from "next/navigation";
 import { CONSTRUCTION_STATUS_LABELS, CONSTRUCTION_STATUS_OPTIONS } from "@/domain/search-options";
-import type { FactAuditEvent, FactValue, Project, ResearchFactField, VerificationState } from "@/domain/types";
+import type { FactValue, Project, ResearchFactField, VerificationState } from "@/domain/types";
+import type { StaffAuditEntry } from "@/server/repositories";
 import { getLocality } from "@/config/markets";
 import { RESEARCH_FACT_FIELDS } from "@/research/fact-edit";
 import { canSetVerification } from "@/research/verification";
 import { isStaffAuthError, type StaffSession } from "@/server/auth";
-import { getStaffProjectView } from "@/server/services/research";
+import { getStaffProjectView, listResearchSources } from "@/server/services/research";
 import { Alert, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -69,17 +70,24 @@ function verificationOptions(fact: FactValue<unknown>, session: StaffSession) {
 }
 
 async function ProjectContent({ params }: { params: PageProps<"/admin/projects/[id]">["params"] }) {
-  const { id } = await params;
-  const session = await requireStaffPage(`/admin/projects/${id}`);
+  const { id: rawId } = await params;
+  let id: string;
+  try {
+    id = decodeURIComponent(rawId);
+  } catch {
+    notFound(); // malformed percent-encoding
+  }
+  const session = await requireStaffPage(`/admin/projects/${encodeURIComponent(id)}`);
   let view;
   try {
-    view = await getStaffProjectView(decodeURIComponent(id));
+    view = await getStaffProjectView(id);
   } catch (e) {
     if (isStaffAuthError(e)) redirect("/admin/login?next=%2Fadmin%2Fprojects");
     throw e;
   }
   if (!view.ok) notFound();
-  const { project, readiness, audit } = view;
+  const { project, readiness, audit, factVersions } = view;
+  const sourceOptions = listResearchSources().map((o) => ({ id: o.id, name: o.name }));
   const nowIso = new Date().toISOString(); // request time (after connection()): default observed date
   const isAdmin = session.role === "admin";
 
@@ -134,7 +142,7 @@ async function ProjectContent({ params }: { params: PageProps<"/admin/projects/[
                   {fact.sources.length === 0 ? (
                     <p className="text-sm text-muted-foreground">Add at least one source before changing verification.</p>
                   ) : options.length ? (
-                    <VerificationForm projectId={project.id} field={field} options={options} />
+                    <VerificationForm projectId={project.id} field={field} options={options} expectedVersion={factVersions[field]} />
                   ) : (
                     <p className="text-sm text-muted-foreground">No verification changes are available to your role from this state.</p>
                   )}
@@ -153,6 +161,7 @@ async function ProjectContent({ params }: { params: PageProps<"/admin/projects/[
                       initialValue={inputValue(field, fact)}
                       initialSources={sourceDrafts(fact)}
                       nowIso={nowIso}
+                      sourceOptions={sourceOptions}
                       statusOptions={
                         field === "constructionStatus"
                           ? CONSTRUCTION_STATUS_OPTIONS.map((s) => ({ value: s, label: CONSTRUCTION_STATUS_LABELS[s] }))
@@ -205,7 +214,7 @@ function PublishPanel({ project, readiness, isAdmin }: { project: Project; readi
   );
 }
 
-function AuditTable({ audit }: { audit: FactAuditEvent[] }) {
+function AuditTable({ audit }: { audit: StaffAuditEntry[] }) {
   const rows = [...audit].sort((a, b) => (a.at < b.at ? 1 : -1));
   return (
     <section aria-labelledby="audit-heading" className="space-y-3">
@@ -239,7 +248,9 @@ function AuditTable({ audit }: { audit: FactAuditEvent[] }) {
                       ? `${e.fromVerification ? VERIFICATION_LABEL[e.fromVerification] : "—"} → ${e.toVerification ? VERIFICATION_LABEL[e.toVerification] : "—"}`
                       : "—"}
                   </td>
-                  <td className="p-3">{e.actorRole}</td>
+                  <td className="p-3">
+                    {e.actorName || e.actorId} <span className="text-xs text-muted-foreground">({e.actorRole})</span>
+                  </td>
                   <td className="p-3">{e.note ?? ""}</td>
                 </tr>
               ))}

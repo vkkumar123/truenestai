@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Suspense } from "react";
 import { listLocalities } from "@/config/markets";
+import { listDevelopers } from "@/server/services/research";
 import { NewProjectForm } from "@/components/admin/new-project-form";
 import { requireStaffPage } from "../../_lib/session";
 
@@ -28,5 +29,8 @@ async function NewProjectContent() {
   const localities = listLocalities({ activeOnly: true })
     .map((l) => ({ id: l.id, name: l.name }))
     .sort((a, b) => a.name.localeCompare(b.name));
-  return <NewProjectForm localities={localities} />;
+  const developers = (await listDevelopers())
+    .map((d) => ({ id: d.id, name: d.name }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return <NewProjectForm localities={localities} developers={developers} />;
 }

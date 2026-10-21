@@ -31,6 +31,7 @@ export function FactEditForm({
   initialSources,
   nowIso,
   statusOptions,
+  sourceOptions,
 }: {
   projectId: string;
   field: ResearchFactField;
@@ -43,6 +44,8 @@ export function FactEditForm({
   nowIso: string;
   /** For constructionStatus: options for the value select. */
   statusOptions?: { value: string; label: string }[];
+  /** Citable sources from the registry (id — name). */
+  sourceOptions: { id: string; name: string }[];
 }) {
   const [state, formAction, pending] = useActionState(updateFactAction, initial);
   const [status, setStatus] = useState(initialStatus);
@@ -110,8 +113,18 @@ export function FactEditForm({
             <p className="text-xs font-medium text-muted-foreground">Source {i + 1}{i > 0 ? " (optional)" : ""}</p>
             <div className="grid gap-2 sm:grid-cols-2">
               <div className="space-y-1">
-                <Label htmlFor={id(`s${i}-id`)} className="text-xs">Source id</Label>
-                <Input id={id(`s${i}-id`)} name={`sources[${i}].sourceId`} value={s.sourceId} onChange={(e) => setSource(i, "sourceId", e.target.value)} placeholder="e.g. k-rera" />
+                <Label htmlFor={id(`s${i}-id`)} className="text-xs">Source</Label>
+                <Select id={id(`s${i}-id`)} name={`sources[${i}].sourceId`} value={s.sourceId} onChange={(e) => setSource(i, "sourceId", e.target.value)}>
+                  <option value="">{i === 0 ? "Choose a source" : "None"}</option>
+                  {sourceOptions.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.id} — {o.name}
+                    </option>
+                  ))}
+                  {s.sourceId && !sourceOptions.some((o) => o.id === s.sourceId) ? (
+                    <option value={s.sourceId}>{s.sourceId} (not in the citable list)</option>
+                  ) : null}
+                </Select>
               </div>
               <div className="space-y-1">
                 <Label htmlFor={id(`s${i}-url`)} className="text-xs">URL (https)</Label>

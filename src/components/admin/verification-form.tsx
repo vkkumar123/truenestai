@@ -17,10 +17,13 @@ export function VerificationForm({
   projectId,
   field,
   options,
+  expectedVersion,
 }: {
   projectId: string;
   field: ResearchFactField;
   options: { value: string; label: string }[];
+  /** Version of the fact as rendered; the server refuses the change if it has moved on. */
+  expectedVersion: string;
 }) {
   const [state, formAction, pending] = useActionState(changeVerificationAction, initial);
   const id = (s: string) => `${field}-v-${s}`;
@@ -28,6 +31,7 @@ export function VerificationForm({
     <form action={formAction} className="space-y-3">
       <input type="hidden" name="projectId" value={projectId} />
       <input type="hidden" name="field" value={field} />
+      <input type="hidden" name="expectedVersion" value={expectedVersion} />
       <div className="grid gap-2 sm:grid-cols-[minmax(0,14rem)_1fr]">
         <div className="space-y-1">
           <Label htmlFor={id("to")} className="text-xs">Change verification to</Label>

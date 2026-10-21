@@ -84,3 +84,6 @@ No legal or regulatory facts are asserted in these docs; any statement about RER
 
 ## D13 — Edits to a published project keep it published — accepted (2026-10-21)
 - An edit resets that fact to `unverified`; the public page already shows each fact's verification badge, so buyers see it as unverified. Auto-unpublishing on every correction would hide good projects. The admin list flags published projects that no longer pass readiness so an admin re-verifies or unpublishes. Revisit with the owner.
+
+## D14 — Workaround for Next 16.4 dev-mode cookies() invariant after no-JS action posts — accepted (2026-10-21)
+- A failed, non-revalidating server action posted without JS leaves the request in the action phase; `cookies()` then throws an InvariantError in dev. Staff actions call `ensureRenderPhaseAfterAction()` (`src/server/actions/mpa.ts`) which revalidates the admin path. `getStaffSession()` now rethrows unexpected errors instead of treating them as signed-out. Remove the workaround when Next fixes it upstream.

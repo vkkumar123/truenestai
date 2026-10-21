@@ -9,6 +9,7 @@ import { trustedProxyHops } from "../env";
 import { log } from "../log";
 import { submitLead, updateLeadStatus } from "../services/leads";
 import type { SubmitLeadState, UpdateLeadStatusState } from "./types";
+import { ensureRenderPhaseAfterAction } from "./mpa";
 
 /** String fields only; files and repeated keys are ignored (first value wins). */
 function formToObject(formData: FormData): Record<string, string> {
@@ -45,6 +46,7 @@ export async function submitLeadAction(_prev: SubmitLeadState, formData: FormDat
  * Form fields: leadId, status.
  */
 export async function updateLeadStatusAction(_prev: UpdateLeadStatusState, formData: FormData): Promise<UpdateLeadStatusState> {
+  ensureRenderPhaseAfterAction("/admin", "layout"); // see mpa.ts
   const leadId = String(formData.get("leadId") ?? "");
   const status = String(formData.get("status") ?? "") as LeadStatus;
   try {

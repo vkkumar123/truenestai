@@ -1,5 +1,7 @@
 import "server-only";
 import { cookies } from "next/headers";
+import { unstable_rethrow } from "next/navigation";
+import { isAuthError } from "@supabase/supabase-js";
 import { createServerClient } from "@supabase/ssr";
 import { adminDevAdvisorPassword, adminDevPassword, ConfigError, dataBackend, isProduction, sessionSecret, supabaseEnv } from "./env";
 import { log } from "./log";
@@ -88,16 +90,25 @@ async function getFixtureStaffSession(now: Date): Promise<StaffSession | null> {
 }
 
 /**
- * Current staff session, or null. Never throws: a missing/invalid session, a configuration error
- * (logged as auth.misconfigured) or an auth-service failure all yield null (deny).
+ * Current staff session, or null for: no/invalid/expired session, a configuration error (logged
+ * as auth.misconfigured) or a Supabase auth failure (deny). Next.js framework signals
+ * (redirect, notFound, dynamic bailouts, prerender interrupts) and any other unexpected error are
+ * RE-THROWN, never turned into "signed out" — swallowing them hid real failures behind a login redirect.
  */
 export async function getStaffSession(now: Date = new Date()): Promise<StaffSession | null> {
   try {
     return dataBackend() === "supabase" ? await getSupabaseStaffSession() : await getFixtureStaffSession(now);
   } catch (e) {
-    if (e instanceof ConfigError) log.error("auth.misconfigured", { reason: e.message });
-    else log.error("auth.session_check_failed", { reason: e instanceof Error ? e.name : "unknown" });
-    return null;
+    unstable_rethrow(e);
+    if (e instanceof ConfigError) {
+      log.error("auth.misconfigured", { reason: e.message });
+      return null;
+    }
+    if (isAuthError(e)) {
+      log.warn("auth.session_check_failed", { reason: e.name });
+      return null;
+    }
+    throw e;
   }
 }
 

@@ -6,6 +6,7 @@ import { isStaffAuthError } from "../auth";
 import { log } from "../log";
 import { changeVerification, createProject, setPublished, updateFact, type ResearchResult } from "../services/research";
 import type { ResearchActionState } from "./types";
+import { ensureRenderPhaseAfterAction } from "./mpa";
 
 // Staff research actions for useActionState: `useActionState(action, { status: "idle" })`.
 // Authorization is enforced in services/research.ts (requireStaff + role rules).
@@ -40,6 +41,8 @@ async function run(
   success: string,
   publicChanged: (project: Project, changed: boolean) => boolean,
 ): Promise<ResearchActionState> {
+  // See mpa.ts: guarantees the post-action render is in the render phase even on failure.
+  ensureRenderPhaseAfterAction("/admin/projects", "layout");
   try {
     const r = await fn();
     if (!r.ok) return { status: "error", error: r.error, message: r.message, ...(r.errors ? { errors: r.errors } : {}) };

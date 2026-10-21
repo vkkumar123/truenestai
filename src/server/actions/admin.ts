@@ -5,6 +5,7 @@ import { dataBackend } from "../env";
 import { loginWithDevPassword, loginWithSupabasePassword, logoutStaff } from "../auth";
 import type { AdminLoginState } from "./types";
 import { safeAdminPath } from "../redirects";
+import { ensureRenderPhaseAfterAction } from "./mpa";
 
 const LOGIN_PATH = "/admin/login";
 
@@ -16,6 +17,7 @@ const LOGIN_PATH = "/admin/login";
  * Optional field `next`: an /admin path to go to after sign-in. Redirects on success.
  */
 export async function adminLoginAction(_prev: AdminLoginState, formData: FormData): Promise<AdminLoginState> {
+  ensureRenderPhaseAfterAction("/admin/login"); // see mpa.ts (failed logins re-render the page)
   const password = formData.get("password");
   if (typeof password !== "string" || password.length === 0 || password.length > 512) {
     return { status: "error", message: "Enter your password." };

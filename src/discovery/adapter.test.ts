@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { NOT_VERIFIED, MAX_TITLE, normalize, normalizeRecord, type RawExternalRecord } from "./adapter";
+import { InvalidRecordError, NOT_VERIFIED, MAX_TITLE, normalize, normalizeRecord, safeHttpsUrl, type RawExternalRecord } from "./adapter";
 import { getSource } from "./registry";
 
 const now = new Date("2026-10-01T00:00:00Z");
@@ -39,5 +39,13 @@ describe("normalize", () => {
     expect(r.reraNumber).toBeNull();
     expect(r.listing.title).toBe(`Listing on ${src.name}`);
     expect(r.listing.limitations).toContain(NOT_VERIFIED);
+  });
+  it("rejects non-https or malformed canonical URLs and keeps valid ones unmodified", () => {
+    const src = getSource("sample-feed")!;
+    for (const bad of ["http://example.com/x", "javascript:alert(1)", "not a url", "", "https://exa mple.com/x"])
+      expect(() => normalize({ ...raw, canonicalUrl: bad }, src, now)).toThrow(InvalidRecordError);
+    const odd = "https://example.com/sample/a<b>?q=<x>";
+    expect(normalize({ ...raw, canonicalUrl: odd }, src, now).canonicalUrl).toBe(odd);
+    expect(safeHttpsUrl(" https://example.com/ok ")).toBe("https://example.com/ok");
   });
 });

@@ -44,6 +44,9 @@ Prices are "as listed by the source". Fixture records are marked `isSample: true
 - **Strong keys** (merge): the same RERA number; the same source id plus source record id; the same normalised canonical URL (host lowercased, `www.` and a trailing slash removed, tracking parameters and the fragment removed).
 - **Secondary keys** (merge): the same normalised developer, plus either the same normalised address or coordinates within 150 m.
 - If both records have RERA numbers and they differ, neither the strong nor the secondary keys merge them. The pair is flagged `conflicting_rera`.
+- Clustering is transitive, but a union is refused if the two clusters already hold different RERA numbers. For example, A (RERA X) and C (RERA Y) never merge through a record B that has no RERA number. That pair is flagged `conflicting_rera`, and the flag is always kept.
+- Strong-key merges are applied before secondary-key merges. A secondary merge is refused if the combined cluster would spread beyond 150 m. That pair is flagged `ambiguous_chain`.
+- Canonical URLs must parse as `https:`. A record with an invalid URL is dropped and reported as an error.
 - **Similar names alone never merge.** A name similarity of 0.8 or more with no other match produces a `possible_duplicate` flag for human review.
 - A listing is linked to a researched project (`matchedProjectId`) only by RERA number. Any weaker match is flagged for review.
 

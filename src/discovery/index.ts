@@ -55,7 +55,15 @@ export async function discoverExternalWithReport(query: DiscoveryQuery, opts: Di
     runnable.map(async ({ adapter, source }) => {
       try {
         const raws = await adapter.search(query);
-        return raws.map((raw) => normalizeRecord({ ...raw, sourceId: source.id }, source, now));
+        const out: NormalizedRecord[] = [];
+        for (const raw of raws) {
+          try {
+            out.push(normalizeRecord({ ...raw, sourceId: source.id }, source, now));
+          } catch (e) {
+            errors.push({ sourceId: source.id, message: e instanceof Error ? e.message : String(e) });
+          }
+        }
+        return out;
       } catch (e) {
         errors.push({ sourceId: source.id, message: e instanceof Error ? e.message : String(e) });
         return [];
@@ -83,6 +91,6 @@ export function discoverSampleSync(query: DiscoveryQuery, opts: { env?: RuntimeE
 
 export * from "./adapter";
 export * from "./registry";
-export { dedupe, comparePair, normaliseUrl, nameSimilarity, distanceMeters } from "./dedupe";
+export { dedupe, comparePair, normaliseUrl, nameSimilarity, distanceMeters, spreadMeters } from "./dedupe";
 export type { DedupeCluster, DedupeResult, ReviewFlag, MergeReason, FlagReason } from "./dedupe";
 export { createFixtureAdapter } from "./adapters/fixture-adapter";

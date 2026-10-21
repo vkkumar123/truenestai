@@ -37,4 +37,14 @@ describe("discoverExternal", () => {
     expect((await discoverExternal({ text: "riverbend" }, { env: "test", now }))[0].title).toContain("Riverbend");
     expect(discoverSampleSync({ limit: 3 }, { env: "development", now })).toHaveLength(3);
   });
+  it("drops records with invalid URLs and reports them without failing the batch", async () => {
+    const records = [
+      { sourceId: "sample-feed", sourceRecordId: "OK", canonicalUrl: "https://example.com/ok", title: "SAMPLE Ok (fictional)" },
+      { sourceId: "sample-feed", sourceRecordId: "BAD", canonicalUrl: "http://example.com/bad", title: "SAMPLE Bad (fictional)" },
+    ];
+    const r = await discoverExternalWithReport({}, { env: "test", adapters: [createFixtureAdapter("sample-feed", records)], now });
+    expect(r.listings.map((l) => l.sourceRecordId)).toEqual(["OK"]);
+    expect(r.errors).toHaveLength(1);
+    expect(r.errors[0].message).toMatch(/BAD.*https/);
+  });
 });

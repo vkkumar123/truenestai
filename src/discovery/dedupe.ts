@@ -4,7 +4,9 @@ import type { ExternalListing, Project } from "@/domain/types";
 import type { NormalizedRecord } from "./adapter";
 
 export type MergeReason = "rera_number" | "source_record_id" | "canonical_url" | "developer_address" | "developer_coordinates";
-export type FlagReason = "similar_name_only" | "conflicting_rera" | "project_secondary_match";
+export type FlagReason = "similar_name_only" | "conflicting_rera" | "ambiguous_chain" | "project_secondary_match";
+
+const SECONDARY: MergeReason[] = ["developer_address", "developer_coordinates"];
 
 export interface DedupeCluster {
   listing: ExternalListing; // representative (first member), with matchedProjectId set if any
@@ -67,6 +69,14 @@ export function distanceMeters(a: { lat: number; lng: number }, b: { lat: number
   const dLng = rad(b.lng - a.lng);
   const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+/** Largest pairwise distance among known locations (0 if fewer than two). */
+export function spreadMeters(points: ({ lat: number; lng: number } | null)[]): number {
+  const p = points.filter((x): x is { lat: number; lng: number } => !!x);
+  let max = 0;
+  for (let i = 0; i < p.length; i++) for (let j = i + 1; j < p.length; j++) max = Math.max(max, distanceMeters(p[i], p[j]));
+  return max;
 }
 
 /** Dice coefficient on character bigrams of normalised names (0..1). */
@@ -156,28 +166,52 @@ export function dedupe(records: readonly NormalizedRecord[], projects: readonly 
   const items = records.map(fromRecord);
   const parent = items.map((_, i) => i);
   const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+  // Per-root state so a union can be refused when it would join conflicting clusters.
+  const members = new Map<number, number[]>(items.map((_, i) => [i, [i]]));
+  const rera = new Map<number, Set<string>>(items.map((it, i) => [i, new Set(it.rera)]));
   const reasonsByRoot = new Map<number, Set<MergeReason>>();
-  const pendingFlags: { i: number; j: number; reason: FlagReason }[] = [];
-  const edgeReasons: { i: number; j: number; reason: MergeReason }[] = [];
+  const flags: { i: number; j: number; reason: FlagReason }[] = [];
 
+  const merges: { i: number; j: number; reason: MergeReason }[] = [];
   for (let i = 0; i < items.length; i++) {
     for (let j = i + 1; j < items.length; j++) {
       const r = comparePair(items[i], items[j]);
       if (!r) continue;
-      if ("merge" in r) {
-        parent[find(j)] = find(i);
-        edgeReasons.push({ i, j, reason: r.merge });
-      } else pendingFlags.push({ i, j, reason: r.flag });
+      if ("merge" in r) merges.push({ i, j, reason: r.merge });
+      else flags.push({ i, j, reason: r.flag });
     }
   }
-  for (const e of edgeReasons) {
-    const root = find(e.i);
-    if (!reasonsByRoot.has(root)) reasonsByRoot.set(root, new Set());
-    reasonsByRoot.get(root)!.add(e.reason);
+  // Strong keys first so secondary keys cannot pre-empt them.
+  merges.sort((a, b) => Number(SECONDARY.includes(a.reason)) - Number(SECONDARY.includes(b.reason)));
+
+  for (const { i, j, reason } of merges) {
+    const ri = find(i);
+    const rj = find(j);
+    if (ri === rj) {
+      reasonsByRoot.get(ri)?.add(reason);
+      continue;
+    }
+    const a = rera.get(ri)!;
+    const b = rera.get(rj)!;
+    if (a.size && b.size && ![...a].some((x) => b.has(x))) {
+      flags.push({ i, j, reason: "conflicting_rera" }); // e.g. A(RERA X) - B(none) - C(RERA Y) bridge
+      continue;
+    }
+    const combined = [...members.get(ri)!, ...members.get(rj)!];
+    if (SECONDARY.includes(reason) && spreadMeters(combined.map((k) => items[k].location)) > COORDINATE_MATCH_METERS) {
+      flags.push({ i, j, reason: "ambiguous_chain" }); // secondary chaining would exceed the radius
+      continue;
+    }
+    parent[rj] = ri;
+    members.set(ri, combined);
+    rera.set(ri, new Set([...a, ...b]));
+    const rs = new Set([...(reasonsByRoot.get(ri) ?? []), ...(reasonsByRoot.get(rj) ?? []), reason]);
+    reasonsByRoot.set(ri, rs);
   }
 
-  const reviewFlags: ReviewFlag[] = pendingFlags
-    .filter((f) => find(f.i) !== find(f.j))
+  // Name-only flags are moot once records share a cluster; conflict flags are always kept.
+  const reviewFlags: ReviewFlag[] = flags
+    .filter((f) => f.reason !== "similar_name_only" || find(f.i) !== find(f.j))
     .map((f) => ({ kind: "possible_duplicate", reason: f.reason, ids: [items[f.i].id, items[f.j].id] }));
 
   const projectItems = projects.map((p) => ({ p, c: fromProject(p) }));

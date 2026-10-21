@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Project } from "@/domain/types";
 import { normalizeRecord, type RawExternalRecord } from "./adapter";
-import { dedupe, distanceMeters, normaliseUrl } from "./dedupe";
+import { dedupe, distanceMeters, normaliseUrl, spreadMeters } from "./dedupe";
 import { SAMPLE_RECORDS } from "./fixtures";
 import { getSource } from "./registry";
 
@@ -59,5 +59,26 @@ describe("dedupe", () => {
     expect(clusterOf(r, "sample-feed:SAMPLE-001").listing.matchedProjectId).toBe("sample-project-1");
     expect(clusterOf(r, "sample-feed:SAMPLE-002").listing.matchedProjectId).toBeNull();
     expect(r.reviewFlags).toContainEqual({ kind: "possible_duplicate", reason: "similar_name_only", ids: ["sample-feed:SAMPLE-002", "sample-project-1"] });
+  });
+  it("refuses a transitive bridge between different RERA numbers and keeps the conflict flag", () => {
+    const base = { sourceId: "sample-feed", title: "SAMPLE Bridge (fictional)", developerName: "SAMPLE Developer E", priceText: null };
+    const a = norm({ ...base, sourceRecordId: "BR-A", canonicalUrl: "https://example.com/bridge", reraNumber: "SAMPLE-RERA-X" });
+    const b = norm({ ...base, sourceId: "sample-feed-mirror", sourceRecordId: "BR-B", canonicalUrl: "https://example.com/bridge/", reraNumber: null, address: "SAMPLE 9 Road" });
+    const c = norm({ ...base, sourceRecordId: "BR-C", canonicalUrl: "https://example.com/bridge-c", reraNumber: "SAMPLE-RERA-Y", address: "SAMPLE 9 Road" });
+    const r = dedupe([a, b, c]);
+    expect(clusterOf(r, a.listing.id).memberIds).not.toContain(c.listing.id);
+    expect(r.reviewFlags.some((f) => f.reason === "conflicting_rera" && f.ids.includes(c.listing.id))).toBe(true);
+  });
+  it("does not chain secondary (coordinate) merges beyond 150 m", () => {
+    const at = (id: string, lat: number) =>
+      norm({ sourceId: "sample-feed", sourceRecordId: id, canonicalUrl: `https://example.com/chain/${id}`, title: `SAMPLE Chain ${id} (fictional)`, developerName: "SAMPLE Developer F", location: { lat, lng: 77.6, precision: "exact" } });
+    const recs = [at("p", 13.0), at("q", 13.001), at("r", 13.002)]; // ~111 m steps, ~222 m end to end
+    const r = dedupe(recs);
+    for (const c of r.clusters) {
+      const pts = c.memberIds.map((id) => recs.find((x) => x.listing.id === id)!.listing.location);
+      expect(spreadMeters(pts)).toBeLessThanOrEqual(150);
+    }
+    expect(r.clusters).toHaveLength(2);
+    expect(r.reviewFlags.some((f) => f.reason === "ambiguous_chain")).toBe(true);
   });
 });

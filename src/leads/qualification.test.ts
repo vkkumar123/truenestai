@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { LeadInput } from "@/domain/types";
 import { qualifyLead } from "./qualification";
 
+// Obviously fictional test numbers (not real subscribers). Do not replace with realistic numbers.
+const SAMPLE_PHONE_E164 = "+916000000001";
+
 const minimal: LeadInput = {
   requestType: "buyer_assistance",
   name: "Sample Buyer",
@@ -29,7 +32,7 @@ describe("qualifyLead", () => {
       projectId: "SAMPLE-P1",
       budgetBand: "50l_1cr",
       message: "Please check the RERA registration and possession timeline for this project.",
-      phone: "+919876543210",
+      phone: SAMPLE_PHONE_E164,
     });
     expect(q.score).toBe(95);
     expect(q.tier).toBe("high");

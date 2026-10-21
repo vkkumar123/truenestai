@@ -2,7 +2,7 @@
 // Any change to the wording below MUST bump CONSENT_TEXT_VERSION so stored leads record
 // exactly which text the person agreed to.
 
-export const CONSENT_TEXT_VERSION = "2026-10-21.v1";
+export const CONSENT_TEXT_VERSION = "2026-10-21.v2";
 
 export const CONSENT_COPY_STATUS = "draft_pending_legal_review" as const;
 
@@ -22,6 +22,10 @@ export const CONSENT_COPY = {
     "TrueNest may receive fees from developers or partners when a transaction happens. " +
     "We disclose these relationships to you. This information is not legal advice, and TrueNest " +
     "does not guarantee title, safety or returns of any property.",
+  /** Shown on the success screen after submission. */
+  afterSubmit:
+    "Thank you. A TrueNest advisor will review your request and contact you using your chosen channel. " +
+    "We will not share your details with a developer or partner unless you agree to it first.",
   withdrawal:
     "You can ask us to stop contacting you or delete your request at any time.",
 } as const;

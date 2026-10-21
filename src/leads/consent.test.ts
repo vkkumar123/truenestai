@@ -12,6 +12,9 @@ describe("consent copy", () => {
     expect(CONSENT_COPY.commercialDisclosure).toMatch(/not legal advice/);
     expect(CONSENT_COPY.commercialDisclosure).toMatch(/does not guarantee title, safety or returns/);
   });
+  it("after-submit copy promises sharing only with the buyer's agreement", () => {
+    expect(CONSENT_COPY.afterSubmit).toMatch(/not share your details with a developer or partner unless you agree/);
+  });
   it("marks marketing consent as optional", () => {
     expect(CONSENT_COPY.marketingConsent).toMatch(/^Optional/);
   });

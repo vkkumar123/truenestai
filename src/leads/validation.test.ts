@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import { CONSENT_TEXT_VERSION } from "./consent";
 import { normaliseIndianMobile, parseLeadInput } from "./validation";
 
+// Obviously fictional test numbers (not real subscribers). Do not replace with realistic numbers.
+const SAMPLE_PHONE_LOCAL = "6000000001";
+const SAMPLE_PHONE_E164 = "+916000000001";
+
 const base = {
   requestType: "verification",
   name: "  Sample Buyer  ",
@@ -46,19 +50,21 @@ describe("parseLeadInput", () => {
   });
 
   it("accepts nested consent/attribution objects", () => {
-    const { contactConsent, consentTextVersion, ...rest } = base;
+    const rest: Record<string, unknown> = { ...base };
+    delete rest.contactConsent;
+    delete rest.consentTextVersion;
     const r = parseLeadInput({
       ...rest,
-      consent: { contactConsent: true, marketingConsent: "true", consentTextVersion },
+      consent: { contactConsent: true, marketingConsent: "true", consentTextVersion: CONSENT_TEXT_VERSION },
       attribution: { utmMedium: "cpc" },
     });
     expect(r.ok && r.value.consent.marketingConsent).toBe(true);
     expect(r.ok && r.value.attribution).toEqual({ utmMedium: "cpc" });
-    void contactConsent;
   });
 
   it("rejects missing or false contact consent", () => {
-    const { contactConsent: _c, ...noConsent } = base;
+    const noConsent: Record<string, unknown> = { ...base };
+    delete noConsent.contactConsent;
     expect(errs(noConsent).contactConsent).toMatch(/agree/);
     expect(errs({ ...base, contactConsent: "false" }).contactConsent).toBeDefined();
     expect(errs({ ...base, contactConsent: false }).contactConsent).toBeDefined();
@@ -78,14 +84,14 @@ describe("parseLeadInput", () => {
 
   it("rejects channel without matching contact detail", () => {
     expect(errs({ ...base, preferredChannel: "whatsapp" }).preferredChannel).toMatch(/mobile/);
-    expect(errs({ ...base, email: "", phone: "9876543210", preferredChannel: "email" }).preferredChannel).toMatch(
+    expect(errs({ ...base, email: "", phone: SAMPLE_PHONE_LOCAL, preferredChannel: "email" }).preferredChannel).toMatch(
       /email/,
     );
   });
 
   it("normalises phone and accepts whatsapp with phone", () => {
-    const r = parseLeadInput({ ...base, email: "", phone: "+91 98765-43210", preferredChannel: "whatsapp" });
-    expect(r.ok && r.value.phone).toBe("+919876543210");
+    const r = parseLeadInput({ ...base, email: "", phone: "+91 60000-00001", preferredChannel: "whatsapp" });
+    expect(r.ok && r.value.phone).toBe(SAMPLE_PHONE_E164);
   });
 
   it("rejects invalid phone and email", () => {
@@ -116,16 +122,16 @@ describe("parseLeadInput", () => {
 
 describe("normaliseIndianMobile", () => {
   it.each([
-    ["9876543210", "+919876543210"],
-    ["+91 98765 43210", "+919876543210"],
-    ["+91-98765-43210", "+919876543210"],
-    ["919876543210", "+919876543210"],
-    ["09876543210", "+919876543210"],
-    ["(987) 654-3210", "+919876543210"],
-    ["6000000000", "+916000000000"],
+    [SAMPLE_PHONE_LOCAL, SAMPLE_PHONE_E164],
+    ["+91 60000 00001", SAMPLE_PHONE_E164],
+    ["+91-60000-00001", SAMPLE_PHONE_E164],
+    ["916000000001", SAMPLE_PHONE_E164],
+    ["06000000001", SAMPLE_PHONE_E164],
+    ["(600) 000-0001", SAMPLE_PHONE_E164],
+    ["9000000002", "+919000000002"],
   ])("%s → %s", (input, out) => expect(normaliseIndianMobile(input)).toBe(out));
 
-  it.each(["5876543210", "987654321", "98765432101", "+1 4155552671", "+44 9876543210", "abcdefghij"])(
+  it.each(["5000000001", "600000000", "60000000011", "+1 5550000001", "+44 6000000001", "abcdefghij"])(
     "rejects %s",
     (input) => expect(normaliseIndianMobile(input)).toBeNull(),
   );

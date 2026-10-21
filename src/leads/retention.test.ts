@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { Lead } from "@/domain/types";
 import { canTransition, computeRetentionUntil, redactLeadForLog, transitionLead, withdrawLead } from "./retention";
 
+// Obviously fictional test numbers (not real subscribers). Do not replace with realistic numbers.
+const SAMPLE_PHONE_LOCAL = "6000000001";
+const SAMPLE_PHONE_E164 = "+916000000001";
+
 const lead: Lead = {
   id: "lead_SAMPLE_1",
   status: "new",
@@ -10,7 +14,7 @@ const lead: Lead = {
   requestType: "verification",
   name: "Sample Buyer",
   email: "buyer@example.com",
-  phone: "+919876543210",
+  phone: SAMPLE_PHONE_E164,
   preferredChannel: "phone",
   message: "Private message",
   projectId: "SAMPLE-P1",
@@ -54,7 +58,7 @@ describe("redactLeadForLog", () => {
     const red = redactLeadForLog(lead);
     expect(red).toEqual({ id: "lead_SAMPLE_1", status: "new", requestType: "verification" });
     const s = JSON.stringify(red);
-    for (const pii of ["Sample Buyer", "buyer@example.com", "9876543210", "Private message"]) {
+    for (const pii of ["Sample Buyer", "buyer@example.com", SAMPLE_PHONE_LOCAL, "Private message"]) {
       expect(s).not.toContain(pii);
     }
   });
@@ -69,7 +73,7 @@ describe("withdrawLead", () => {
     expect(r.lead.consent.contactConsent).toBe(false);
     expect(r.lead.consent.marketingConsent).toBe(false);
     const s = JSON.stringify(r.lead);
-    for (const pii of ["Sample Buyer", "buyer@example.com", "9876543210", "Private message"]) {
+    for (const pii of ["Sample Buyer", "buyer@example.com", SAMPLE_PHONE_LOCAL, "Private message"]) {
       expect(s).not.toContain(pii);
     }
   });

@@ -210,9 +210,9 @@ const fixtureFiles = walk(SRC).filter((f) => {
 });
 
 const PHONE_PATTERNS = [
-  /(?<![\d.])(?:\+91[\s-]?|0091[\s-]?|\b0)?[6-9]\d{9}(?![\d.])/g, // 9876543210, +919876543210
-  /(?<![\d.])(?:\+91[\s-]?)?[6-9]\d{4}[\s-]\d{5}(?![\d.])/g, // 98765 43210, +91-98765-43210
-  /(?<![\d.])(?:\+91[\s-]?)?[6-9]\d{2}[\s-]\d{3}[\s-]\d{4}(?![\d.])/g, // 987-654-3210
+  /(?<![\d.])(?:\+91[\s-]?|0091[\s-]?|\b0)?[6-9]\d{9}(?![\d.])/g, // e.g. 6000000001, +916000000001
+  /(?<![\d.])(?:\+91[\s-]?)?[6-9]\d{4}[\s-]\d{5}(?![\d.])/g, // e.g. 60000 00002, +91-60000-00002
+  /(?<![\d.])(?:\+91[\s-]?)?[6-9]\d{2}[\s-]\d{3}[\s-]\d{4}(?![\d.])/g, // e.g. 600-000-0003
 ];
 const EMAIL = /[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)/g;
 const URL_RE = /https?:\/\/([^/\s"'`)]+)/g;
@@ -230,7 +230,7 @@ function findUnsafeUrls(code: string): string[] {
 
 describe("fixtures contain no real-looking personal data or real URLs", () => {
   it("scanner self-check", () => {
-    expect(findPhones("call 9876543210 or +91 98765 43210 or 987-654-3210")).toHaveLength(3);
+    expect(findPhones("call 6000000001 or +91 60000 00002 or 600-000-0003")).toHaveLength(3);
     expect(findPhones("lat: 13.0358, lng: 77.597, price 15000000, 2026-10-01T00:00:00.000Z")).toEqual([]);
     expect(findUnsafeEmails("a@example.com b@mail.example.org c@gmail.com")).toEqual(["c@gmail.com"]);
     expect(findUnsafeUrls("https://example.com/x https://www.example.org/ https://rera.karnataka.gov.in/")).toEqual([

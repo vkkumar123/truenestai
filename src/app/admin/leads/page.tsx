@@ -2,16 +2,14 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
-import { connection } from "next/server";
 import type { LeadRequestType, LeadStatus } from "@/domain/types";
 import { LEAD_STATUS_LABELS, REQUEST_TYPE_LABELS } from "@/leads/labels";
 import { LEAD_STATUS_TRANSITIONS } from "@/leads/retention";
-import { adminLogoutAction } from "@/server/actions/admin";
-import { getStaffSession, isStaffAuthError } from "@/server/auth";
+import { isStaffAuthError } from "@/server/auth";
+import { requireStaffPage } from "../_lib/session";
 import { listLeads, type StaffLeadView } from "@/server/services/leads";
 import { Alert, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { cn } from "@/components/ui/cn";
 import { LeadStatusForm } from "@/components/admin/lead-status-form";
 import { EXTERNAL_LABEL } from "@/components/property/external-card";
@@ -120,9 +118,7 @@ function Subject({ subject }: { subject: StaffLeadView["subject"] }) {
 }
 
 async function LeadsContent({ searchParams }: { searchParams: PageProps<"/admin/leads">["searchParams"] }) {
-  await connection(); // session checks read cookies and the current time: request-time only
-  const session = await getStaffSession();
-  if (!session) redirect("/admin/login?next=%2Fadmin%2Fleads");
+  const session = await requireStaffPage("/admin/leads");
 
   const sp = await searchParams;
   const rawStatus = typeof sp.status === "string" ? sp.status : "";
@@ -148,11 +144,6 @@ async function LeadsContent({ searchParams }: { searchParams: PageProps<"/admin/
             Signed in as <code className="font-mono">{session.userId}</code> ({session.role}, {session.mode} mode)
           </p>
         </div>
-        <form action={adminLogoutAction}>
-          <Button type="submit" variant="secondary" size="sm">
-            Sign out
-          </Button>
-        </form>
       </div>
 
       <div className="space-y-2">

@@ -1,4 +1,6 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
+import { AdminNav } from "@/components/admin/admin-nav";
 
 export const metadata: Metadata = {
   title: "Staff",
@@ -8,7 +10,9 @@ export const metadata: Metadata = {
 export default function AdminLayout({ children }: LayoutProps<"/admin">) {
   return (
     <div className="space-y-6">
-      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">TrueNest staff area</p>
+      <Suspense fallback={<div className="h-10" aria-hidden="true" />}>
+        <AdminNav />
+      </Suspense>
       {children}
     </div>
   );

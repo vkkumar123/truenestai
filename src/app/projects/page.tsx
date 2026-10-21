@@ -74,7 +74,7 @@ async function Results({ searchParams }: { searchParams: PageProps<"/projects">[
     status: status || undefined,
     lane,
   });
-  const { researched, external, externalErrors, notes } = result;
+  const { researched, external, externalErrors, notes, matchedProjects } = result;
   const total = researched.length + external.length;
   const filterText = [bhk ? `${bhk} BHK` : "", status ? CONSTRUCTION_STATUS_LABELS[status] : ""].filter(Boolean).join(", ");
 
@@ -184,7 +184,7 @@ async function Results({ searchParams }: { searchParams: PageProps<"/projects">[
             <ul className={cn("grid gap-4 sm:grid-cols-2 lg:grid-cols-3")}>
               {external.map((l) => (
                 <li key={l.id}>
-                  <ExternalListingCard listing={l} />
+                  <ExternalListingCard listing={l} researchedVersion={matchedProjects?.[l.id]} />
                 </li>
               ))}
             </ul>

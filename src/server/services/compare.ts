@@ -5,7 +5,10 @@ import { getLocality } from "@/config/markets";
 import { describeComplaintSearch } from "@/research/evidence";
 import { getRepositories, type Repositories } from "../repositories";
 
-export const MAX_COMPARE = 4;
+import { MAX_COMPARE } from "@/domain/limits";
+import { formatInr } from "@/domain/format";
+
+export { MAX_COMPARE };
 
 export interface ComparisonCell {
   projectId: string;
@@ -29,9 +32,6 @@ export type ComparisonResult =
   | { ok: false; error: "too_many" | "none"; message: string };
 
 const idsSchema = z.array(z.string().trim().min(1).max(100)).max(50);
-
-const inr = (n: number) =>
-  n >= 1e7 ? `₹${(n / 1e7).toFixed(2)} Cr` : n >= 1e5 ? `₹${(n / 1e5).toFixed(1)} L` : `₹${n.toLocaleString("en-IN")}`;
 
 function fromFact<T>(projectId: string, f: FactValue<T>, show: (v: T) => string): ComparisonCell {
   return f.status === "known" && f.value !== null
@@ -114,7 +114,7 @@ const ROWS: { key: string; label: string; cell: (p: Project) => ComparisonCell }
     label: "Configurations",
     cell: (p) => (p.units.length ? structural(p.id, p.units.map((u) => u.label).join(", ")) : { projectId: p.id, status: "unknown", value: null, verification: null, sources: [] }),
   },
-  { key: "priceInr", label: "Price range (as listed)", cell: (p) => unitRange(p, "priceInr", inr) },
+  { key: "priceInr", label: "Price range (as listed)", cell: (p) => unitRange(p, "priceInr", formatInr) },
   { key: "carpetAreaSqft", label: "Carpet area (sq ft)", cell: (p) => unitRange(p, "carpetAreaSqft", (n) => n.toLocaleString("en-IN")) },
   { key: "complaints", label: "Complaints", cell: complaintsCell },
   { key: "reviewFlags", label: "Needs professional review", cell: (p) => structural(p.id, p.reviewFlags.length ? `${p.reviewFlags.length} item(s)` : "None recorded") },

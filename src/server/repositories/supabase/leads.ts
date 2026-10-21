@@ -32,6 +32,7 @@ export class SupabaseLeadRepository implements LeadRepository {
     const limit = clampLimit(filter.limit, DEFAULT_LEAD_LIMIT, MAX_LEAD_LIMIT);
     let q = this.db().from("leads").select("*").order("created_at", { ascending: false }).limit(limit);
     if (filter.status) q = q.eq("status", filter.status);
+    if (filter.requestType) q = q.eq("request_type", filter.requestType);
     const { data, error } = await q;
     if (error) throw new Error(`list leads failed (${error.code ?? "unknown"})`);
     return (data as LeadRow[]).map(mapLeadRow);

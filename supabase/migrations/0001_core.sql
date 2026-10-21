@@ -10,6 +10,12 @@
 
 begin;
 
+-- Objects created by this migration's owner in `public` grant nothing to client roles by
+-- default (Supabase's defaults grant anon/authenticated broadly). Grants below are explicit.
+alter default privileges in schema public revoke all on tables from anon, authenticated;
+alter default privileges in schema public revoke all on sequences from anon, authenticated;
+alter default privileges in schema public revoke execute on functions from public, anon, authenticated;
+
 -- ---------------------------------------------------------------------------
 -- Shared value checks (kept as text + CHECK so they map 1:1 to the TS unions)
 -- ---------------------------------------------------------------------------
@@ -22,6 +28,14 @@ create or replace function public.tn_is_geo_precision(v text) returns boolean
 language sql immutable as $$
   select v in ('exact','approximate','locality_centroid')
 $$;
+
+create or replace function public.tn_is_https_or_null(v text) returns boolean
+language sql immutable as $$
+  select v is null or v ~ '^https://'
+$$;
+
+grant execute on function public.tn_is_verification_state(text), public.tn_is_geo_precision(text),
+  public.tn_is_https_or_null(text) to anon, authenticated, service_role;
 
 -- ---------------------------------------------------------------------------
 -- Market geography (mirror of src/config/markets — config is the source of truth)
@@ -141,7 +155,7 @@ create table public.fact_sources (
   id text primary key default gen_random_uuid()::text,
   fact_id text not null references public.facts(id) on delete cascade,
   source_id text not null references public.sources(id),
-  url text,
+  url text check (public.tn_is_https_or_null(url)),
   observed_at timestamptz not null,
   document_date date,
   note text
@@ -170,7 +184,7 @@ create table public.regulatory_records (
   status_value text,
   status_verification text not null default 'unverified' check (public.tn_is_verification_state(status_verification)),
   source_id text not null references public.sources(id),
-  source_url text,
+  source_url text check (public.tn_is_https_or_null(source_url)),
   observed_at timestamptz not null,
   document_date date,
   verification text not null default 'unverified' check (public.tn_is_verification_state(verification)),
@@ -186,7 +200,7 @@ create table public.regulatory_searches (
   project_id text not null references public.projects(id) on delete cascade,
   kind text not null check (kind in ('rera_registration','complaint','order','extension','other_disclosure')),
   source_id text not null references public.sources(id),
-  url text,
+  url text check (public.tn_is_https_or_null(url)),
   searched_at timestamptz not null,
   results_found integer not null check (results_found >= 0),
   note text
@@ -201,7 +215,7 @@ create table public.project_documents (
   version integer not null default 1 check (version >= 1),
   document_date date,
   source_id text not null references public.sources(id),
-  source_url text,
+  source_url text check (public.tn_is_https_or_null(source_url)),
   observed_at timestamptz not null,
   storage_path text,                             -- private storage object; not public
   created_at timestamptz not null default now(),
@@ -430,13 +444,9 @@ grant select on public.staff_profiles to authenticated;
 create policy staff_profiles_read_own on public.staff_profiles for select to authenticated
   using (user_id = auth.uid());
 
--- Leads: public INSERT only (no SELECT/UPDATE/DELETE), consent required, server-owned columns
--- (qualification, retention, timestamps) not insertable by clients.
-grant insert (id, request_type, name, email, phone, preferred_channel, message, project_id,
-  external_listing_id, budget_band, contact_consent, marketing_consent, consent_text_version,
-  status, attribution) on public.leads to anon, authenticated;
-create policy leads_public_insert on public.leads for insert to anon, authenticated
-  with check (contact_consent = true and status = 'new');
+-- Leads: NO client INSERT. The app validates, rate-limits and stores leads server-side with the
+-- service role, so direct PostgREST inserts (bypassing validation/rate limits) are impossible.
+revoke insert on public.leads from anon, authenticated;
 
 grant select on public.leads to authenticated;
 grant update (status, retention_until, updated_at, name, email, phone, message, budget_band,
@@ -449,6 +459,31 @@ grant select, insert (lead_id, actor_id, event_type, from_status, to_status) on 
 create policy lead_events_staff_select on public.lead_events for select to authenticated using (public.is_staff());
 create policy lead_events_staff_insert on public.lead_events for insert to authenticated
   with check (public.is_staff() and actor_id = auth.uid());
+
+-- ---------------------------------------------------------------------------
+-- Search index (filters that live in facts/units). security_invoker => caller's RLS applies,
+-- so anon sees only published projects and current, published facts.
+-- ---------------------------------------------------------------------------
+create view public.project_search_index with (security_invoker = true) as
+select
+  p.id,
+  p.slug,
+  p.name,
+  p.locality_id,
+  p.published,
+  p.is_sample,
+  (select f.value #>> '{}' from public.facts f
+    where f.project_id = p.id and f.field = 'construction_status' and f.is_current and f.status = 'known'
+    limit 1) as construction_status,
+  coalesce((select array_agg(distinct ((regexp_match(u.label, '^\s*(\d+)\s*BHK', 'i'))[1])::int)
+    from public.project_units u
+    where u.project_id = p.id and u.label ~* '^\s*\d+\s*BHK'), '{}') as bhk_counts,
+  (select max(((regexp_match(u.label, '^\s*(\d+)\s*BHK', 'i'))[1])::int)
+    from public.project_units u
+    where u.project_id = p.id and u.label ~* '^\s*\d+\s*BHK') as max_bhk
+from public.projects p;
+
+grant select on public.project_search_index to anon, authenticated, service_role;
 
 -- ---------------------------------------------------------------------------
 -- Triggers
@@ -465,8 +500,8 @@ create trigger projects_touch before update on public.projects
 create trigger leads_touch before update on public.leads
   for each row execute function public.tn_touch_updated_at();
 
--- Lead inserts from client roles: server-owned columns are forced, and a 'created' audit event
--- is written. Runs as definer so the event insert works for anon (who has no lead_events grant).
+-- Every lead insert (service role in practice) writes a 'created' audit event. Security definer so
+-- the audit write never depends on the inserting role's lead_events privileges.
 create or replace function public.tn_leads_after_insert() returns trigger
 language plpgsql security definer set search_path = public, pg_temp as $$
 begin
@@ -495,5 +530,29 @@ end $$;
 
 create trigger leads_check_transition before update of status on public.leads
   for each row execute function public.tn_leads_check_transition();
+
+-- Once withdrawn (PII erased), personal-data and consent columns are frozen for every role.
+create or replace function public.tn_leads_freeze_withdrawn() returns trigger
+language plpgsql as $$
+begin
+  if old.status = 'withdrawn' and (
+       new.name is distinct from old.name
+    or new.email is distinct from old.email
+    or new.phone is distinct from old.phone
+    or new.message is distinct from old.message
+    or new.budget_band is distinct from old.budget_band
+    or new.attribution is distinct from old.attribution
+    or new.contact_consent is distinct from old.contact_consent
+    or new.marketing_consent is distinct from old.marketing_consent
+    or new.qualification_score is distinct from old.qualification_score
+    or new.qualification_tier is distinct from old.qualification_tier
+    or new.qualification_reasons is distinct from old.qualification_reasons) then
+    raise exception 'withdrawn lead personal data cannot be changed' using errcode = 'check_violation';
+  end if;
+  return new;
+end $$;
+
+create trigger leads_freeze_withdrawn before update on public.leads
+  for each row execute function public.tn_leads_freeze_withdrawn();
 
 commit;

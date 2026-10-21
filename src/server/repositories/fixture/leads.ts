@@ -41,6 +41,7 @@ export class FixtureLeadRepository implements LeadRepository {
     const limit = clampLimit(filter.limit, DEFAULT_LEAD_LIMIT, MAX_LEAD_LIMIT);
     return [...this.rows.values()]
       .filter((l) => !filter.status || l.status === filter.status)
+      .filter((l) => !filter.requestType || l.requestType === filter.requestType)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       .slice(0, limit)
       .map((l) => structuredClone(l));

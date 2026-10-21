@@ -1,11 +1,13 @@
 import "server-only";
-import type { ConstructionStatus, ExternalListing, Lead, LeadStatus, Project } from "@/domain/types";
+import type { ConstructionStatus, ExternalListing, Lead, LeadRequestType, LeadStatus, Project } from "@/domain/types";
+import type { BhkOption } from "@/domain/search-options";
 import type { LeadQualification } from "@/leads/qualification";
 
 export interface ProjectFilter {
   localityId?: string;
   text?: string; // case-insensitive match on project name, developer name or slug
   status?: ConstructionStatus; // matches constructionStatus only where it is known
+  bhk?: BhkOption; // at least one unit label like "2 BHK" ("5+" = 5 or more)
   limit?: number;
 }
 
@@ -18,6 +20,8 @@ export interface ProjectRepository {
   getProjectBySlug(slug: string): Promise<Project | null>;
   /** Unknown or unpublished ids are omitted; result keeps the order of `ids`. */
   getProjectsByIds(ids: string[]): Promise<Project[]>;
+  /** True if any published project is SAMPLE data. Side-effect free. */
+  hasSampleData(): Promise<boolean>;
 }
 
 export interface ExternalListingRepository {
@@ -34,6 +38,7 @@ export interface StoredLead extends Lead {
 
 export interface LeadFilter {
   status?: LeadStatus;
+  requestType?: LeadRequestType;
   limit?: number;
 }
 

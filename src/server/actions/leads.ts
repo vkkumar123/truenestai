@@ -19,7 +19,9 @@ function formToObject(formData: FormData): Record<string, string> {
 
 async function clientIpKey(): Promise<string | null> {
   const h = await headers();
-  // First hop as set by the hosting proxy. Spoofable without a trusted proxy (dev-grade only).
+  // TRUSTED-PROXY ASSUMPTION: the host (e.g. Vercel) overwrites X-Forwarded-For, so the first hop
+  // is the client. Without such a proxy this header is client-controlled and spoofable; the
+  // per-contact limit in submitLead still applies.
   const xff = h.get("x-forwarded-for")?.split(",")[0]?.trim();
   return xff || h.get("x-real-ip")?.trim() || null;
 }

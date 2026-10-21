@@ -35,7 +35,10 @@ async function seed(c: Client) {
     insert into facts (id, project_id, field, value, status, verification) values
       ('f-pub', 'p-pub', 'rera_numbers', '["SAMPLE-RERA-0001"]', 'known', 'unverified'),
       ('f-pub-unknown', 'p-pub', 'declared_possession', null, 'unknown', 'unverified'),
-      ('f-hidden', 'p-hidden', 'rera_numbers', '["SAMPLE-RERA-0099"]', 'known', 'unverified');
+      ('f-hidden', 'p-hidden', 'rera_numbers', '["SAMPLE-RERA-0099"]', 'known', 'unverified'),
+      ('f-pub-status', 'p-pub', 'construction_status', '"under_construction"', 'known', 'unverified');
+    insert into project_units (project_id, label) values ('p-pub', '2 BHK'), ('p-pub', '3BHK + study'), ('p-pub', 'Plot'),
+      ('p-hidden', '4 BHK');
     insert into fact_sources (fact_id, source_id, url, observed_at) values
       ('f-pub', 'sample-feed', 'https://example.com/a', now()),
       ('f-hidden', 'sample-feed', 'https://example.com/h', now());
@@ -103,7 +106,7 @@ d("migrations + RLS", () => {
         searches: (await q.query("select project_id, results_found from regulatory_searches")).rows,
         devs: (await q.query("select id from developers")).rows.map((x) => x.id),
       }));
-      expect(r.facts).toEqual(["f-pub", "f-pub-unknown"]);
+      expect(r.facts).toEqual(["f-pub", "f-pub-status", "f-pub-unknown"]);
       expect(r.factSources).toEqual(["f-pub"]);
       expect(r.reg).toEqual([]);
       expect(r.searches).toEqual([{ project_id: "p-pub", results_found: 0 }]);
@@ -147,37 +150,22 @@ d("migrations + RLS", () => {
       expect(err?.code).toBe("42501");
     });
 
-    it("cannot insert a lead without contact consent", async () => {
-      const [sql, params] = insertLead(false);
-      const err = await errorAs(c, "anon", null, sql, [...params]);
-      expect(err?.code).toBe("42501"); // RLS with-check violation
-      expect(err?.message).toMatch(/row-level security/);
+    it("cannot insert leads at all (server stores leads with the service role)", async () => {
+      for (const consent of [true, false]) {
+        const [sql, params] = insertLead(consent);
+        const err = await errorAs(c, "anon", null, sql, [...params]);
+        expect(err?.code).toBe("42501");
+      }
+      const [sql, params] = insertLead(true);
+      expect((await errorAs(c, "authenticated", OTHER_UID, sql, [...params]))?.code).toBe("42501");
+      expect((await errorAs(c, "authenticated", STAFF_UID, sql, [...params]))?.code).toBe("42501");
     });
 
-    it("cannot insert a lead with a non-new status", async () => {
-      const [sql, params] = insertLead(true, "qualified");
-      const err = await errorAs(c, "anon", null, sql, [...params]);
-      expect(err?.message).toMatch(/row-level security/);
-    });
-
-    it("cannot set server-owned lead columns", async () => {
-      const err = await errorAs(c, "anon", null,
-        `insert into leads (request_type, name, email, preferred_channel, contact_consent, consent_text_version, qualification_score)
-         values ('verification', 'SAMPLE', 'a@example.com', 'email', true, $1, 100)`, [CONSENT_VERSION]);
-      expect(err?.code).toBe("42501");
-    });
-
-    it("can insert a lead with consent (and an audit event is written)", async () => {
-      const result = await asRole(c, "anon", null, async (q) => {
-        const [sql, params] = insertLead(true);
-        await q.query(sql, [...params]);
-        await q.query("reset role");
-        return {
-          leads: (await q.query("select count(*)::int as n from leads")).rows[0].n,
-          events: (await q.query("select count(*)::int as n from lead_events where event_type = 'created'")).rows[0].n,
-        };
-      });
-      expect(result).toEqual({ leads: 2, events: 2 });
+    it("search index view shows only published projects with current facts", async () => {
+      const rows = await asRole(c, "anon", null, async (q) =>
+        (await q.query("select id, construction_status, bhk_counts, max_bhk from project_search_index order by id")).rows,
+      );
+      expect(rows).toEqual([{ id: "p-pub", construction_status: "under_construction", bhk_counts: [2, 3], max_bhk: 3 }]);
     });
 
     it("cannot insert or update projects or facts", async () => {
@@ -268,6 +256,41 @@ d("migrations + RLS", () => {
     it("rejects an approved non-fixture source without a terms review", async () => {
       const err = await errorAs(c, "service_role", null, "update sources set status = 'approved' where id = 'candidate-portal'");
       expect(err?.code).toBe("23514");
+    });
+
+    it("service role can insert a consented lead and an audit event is written", async () => {
+      const r = await asRole(c, "service_role", null, async (q) => {
+        const [sql, params] = insertLead(true);
+        await q.query(sql, [...params]);
+        return (await q.query("select count(*)::int as n from lead_events where event_type = 'created'")).rows[0].n;
+      });
+      expect(r).toBe(2);
+    });
+
+    it("rejects non-https source URLs", async () => {
+      for (const sql of [
+        "insert into fact_sources (fact_id, source_id, url, observed_at) values ('f-pub', 'sample-feed', 'http://example.com/x', now())",
+        "insert into regulatory_records (project_id, kind, summary, status_status, source_id, source_url, observed_at) values ('p-pub', 'order', 's', 'unknown', 'sample-feed', 'javascript:alert(1)', now())",
+        "insert into regulatory_searches (project_id, kind, source_id, url, searched_at, results_found) values ('p-pub', 'order', 'sample-feed', 'ftp://example.com', now(), 0)",
+        "insert into project_documents (project_id, document_key, title, kind, source_id, source_url, observed_at) values ('p-pub', 'k', 't', 'other', 'sample-feed', 'http://example.com', now())",
+      ]) {
+        expect((await errorAs(c, "service_role", null, sql))?.code).toBe("23514");
+      }
+      expect(await errorAs(c, "service_role", null,
+        "insert into fact_sources (fact_id, source_id, url, observed_at) values ('f-pub', 'sample-feed', null, now())")).toBeNull();
+    });
+
+    it("freezes personal data on withdrawn leads, for every role", async () => {
+      const err = await asRole(c, "service_role", null, async (q) => {
+        await q.query("update leads set status = 'withdrawn', name = '[erased]', email = null, phone = null, contact_consent = false where id = $1", [LEAD_ID]);
+        try {
+          await q.query("update leads set email = 'again@example.com' where id = $1", [LEAD_ID]);
+          return null;
+        } catch (e) {
+          return (e as Error).message;
+        }
+      });
+      expect(err).toMatch(/withdrawn lead personal data cannot be changed/);
     });
 
     it("rejects a lead without consent even from the service role", async () => {

@@ -14,6 +14,11 @@ export async function getPublishedProject(slug: string, deps: { repos?: Reposito
   return project && project.published === true ? project : null;
 }
 
+/** True when published SAMPLE data is being shown (for the sample-data banner). Side-effect free. */
+export async function hasSampleData(deps: { repos?: Repositories } = {}): Promise<boolean> {
+  return (deps.repos ?? getRepositories()).projects.hasSampleData();
+}
+
 export interface RequestSubject {
   kind: "project" | "external_listing";
   id: string;

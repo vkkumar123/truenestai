@@ -73,15 +73,26 @@ Roles: `anon`, `authenticated` (Supabase JWT; `auth.uid()`), `service_role` (byp
 | infrastructure_items | SELECT where `published` | — | service role |
 | source_observations | none | none | service role |
 | staff_profiles | own row only (authenticated) | own row | service role |
-| leads | INSERT only, with `contact_consent = true` and `status = 'new'`; client columns only (no qualification/retention); **no SELECT** | SELECT, UPDATE (status + erasure columns) | service role |
+| project_search_index (view, `security_invoker`) | SELECT (inherits projects/facts/units RLS) | — | — |
+| leads | **none** (no INSERT, no SELECT): the server validates, rate-limits and stores leads with the service role | SELECT, UPDATE (status + erasure columns) | service role |
 | lead_events | none (a trigger writes `created`) | SELECT; INSERT with `actor_id = auth.uid()` | service role |
 
-DB-level rules independent of RLS: leads require consent unless withdrawn; status changes must follow
-`LEAD_STATUS_TRANSITIONS` (trigger); approved non-fixture sources need `terms_reviewed_at`.
+DB-level rules independent of RLS (apply to every role, including the service role): leads require consent
+unless withdrawn; status changes must follow `LEAD_STATUS_TRANSITIONS` (trigger); once a lead is withdrawn its
+personal-data, consent and qualification columns are frozen (trigger); approved non-fixture sources need
+`terms_reviewed_at`; source/document URLs must be `https://` or null.
+
+Default privileges: the migration revokes default table/sequence privileges from `anon`/`authenticated` and
+default function EXECUTE from `public` in schema `public`, so new objects are private until granted explicitly.
+
+Search filters that live in facts/units (construction status, BHK) are evaluated in SQL through the
+`project_search_index` view (`construction_status`, `bhk_counts int[]`, `max_bhk`) before the limit.
 
 The app's Supabase repositories use the anon client for public reads and the service-role client for lead
 storage/staff operations and worker writes; staff operations are gated in `src/server/services/leads.ts` by
-`requireStaff()` before the repository is called.
+`requireStaff()` before the repository is called. Withdrawal (irreversible PII erasure) additionally requires
+the `admin` role. **Not yet implemented:** per-advisor lead assignment/scoping — every staff member can see all
+leads (planned with milestone M2).
 
 Tests: `npm run test:db` drops and recreates the `public`/`auth` schemas in `DATABASE_URL_TEST`, applies
 `tests/db/supabase-shim.sql` (test-only stand-in for Supabase roles and `auth.uid()`), then every migration,
@@ -93,8 +104,11 @@ and asserts the policies above.
 - `retention_until` = created + 12 months (open) or 24 months (closed/withdrawn) — `src/leads/retention.ts`
   (assumption pending legal review, DPDP Act 2023). Withdrawal erases PII immediately, keeping a minimal audit stub.
 - Logs carry only `redactLeadForLog` fields (id, status, requestType). Audit events carry no PII.
-- Fixture mode keeps leads in server memory per process (dev only). Rate limiting is in-memory per process
-  (dev-grade); production needs a shared store.
+- Fixture mode keeps leads in server memory per process (dev only).
+- Rate limiting (dev-grade, in-memory per process; production needs a shared store) counts only *valid*
+  submissions, keyed both on the client IP and on the hashed email/phone. The IP is the first
+  `X-Forwarded-For` hop, which is trustworthy only behind a proxy that overwrites that header (e.g. Vercel);
+  otherwise it is client-controlled and only the per-contact key is meaningful.
 - A scheduled purge of leads past `retention_until` is not implemented yet.
 
 ## Auth

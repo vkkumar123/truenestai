@@ -16,7 +16,8 @@ const { StaffAuthError } = await import("../auth");
 const { CONSENT_TEXT_VERSION } = await import("@/leads/consent");
 
 const UNPUBLISHED = SAMPLE_PROJECTS.find((p) => !p.published)!;
-const staff = async () => ({ userId: "staff-1", role: "advisor" as const, mode: "fixture" as const, expiresAt: null });
+const staff = async () => ({ userId: "staff-1", role: "admin" as const, mode: "fixture" as const, expiresAt: null });
+const advisor = async () => ({ userId: "staff-2", role: "advisor" as const, mode: "fixture" as const, expiresAt: null });
 const noStaff = async (): Promise<never> => {
   throw new StaffAuthError("unauthenticated");
 };
@@ -141,6 +142,43 @@ describe("searchProperties", () => {
     expect(r2.externalErrors).toEqual(["External listings are unavailable right now."]);
   });
 
+  it("filters by BHK and construction status, ignoring invalid values", async () => {
+    const repos = createFixtureRepositories();
+    const discover = vi.fn(async () => ({ listings: [listing("x1")], errors: [] }));
+    const one = await searchProperties({ bhk: "1", lane: "researched" }, { repos, discover });
+    expect(one.researched.map((p) => p.id)).toEqual(["sample-proj-hennur"]);
+    const three = await searchProperties({ bhk: "3", lane: "researched" }, { repos, discover });
+    expect(three.researched.map((p) => p.id).sort()).toEqual(["sample-proj-lakeview", "sample-proj-northwind", "sample-proj-riverside"]);
+    expect((await searchProperties({ bhk: "5+", lane: "researched" }, { repos, discover })).researched).toEqual([]);
+    const ready = await searchProperties({ status: "ready_to_move", lane: "researched" }, { repos, discover });
+    expect(ready.researched.map((p) => p.id)).toEqual(["sample-proj-northwind"]);
+    const invalid = await searchProperties({ bhk: "7", status: "bogus", lane: "nope" }, { repos, discover, minResearched: 0 });
+    expect(invalid.researched.length).toBe(SAMPLE_PROJECTS.filter((p) => p.published).length);
+  });
+
+  it("lane=researched never queries Lane B; lane=external always does and returns no researched", async () => {
+    const repos = createFixtureRepositories();
+    const discover = vi.fn(async () => ({ listings: [listing("x1"), listing("dup", "sample-proj-lakeview")], errors: [] }));
+    const a = await searchProperties({ text: "nothing-matches", lane: "researched" }, { repos, discover, minResearched: 50 });
+    expect(discover).not.toHaveBeenCalled();
+    expect(a).toMatchObject({ researched: [], external: [], externalQueried: false });
+    const b = await searchProperties({ localityId: "hebbal", lane: "external" }, { repos, discover, minResearched: 0 });
+    expect(discover).toHaveBeenCalledTimes(1);
+    expect(b.researched).toEqual([]);
+    expect(b.external.map((l) => l.id)).toEqual(["x1", "dup"]); // nothing researched returned, so nothing excluded
+  });
+
+  it("Lane-A-only filters suppress Lane B under lane=all and add a note under lane=external", async () => {
+    const repos = createFixtureRepositories();
+    const discover = vi.fn(async () => ({ listings: [listing("x1")], errors: [] }));
+    const all = await searchProperties({ bhk: "5+" }, { repos, discover });
+    expect(discover).not.toHaveBeenCalled();
+    expect(all.notes?.[0]).toMatch(/apply only to researched/);
+    const ext = await searchProperties({ bhk: "2", lane: "external" }, { repos, discover });
+    expect(ext.external).toHaveLength(1);
+    expect(ext.notes?.[0]).toMatch(/apply only to researched/);
+  });
+
   it("returns nothing for an unknown locality id", async () => {
     const r = await searchProperties({ localityId: "not-a-locality" }, { repos: createFixtureRepositories() });
     expect(r.researched).toEqual([]);
@@ -223,14 +261,20 @@ describe("submitLead", () => {
     expect(r).toMatchObject({ ok: false, reason: "validation", errors: { projectId: expect.any(String) } });
   });
 
-  it("rate-limits per ip key", async () => {
+  it("rate-limits valid submissions per ip key and per contact; invalid ones do not count", async () => {
     const repos = createFixtureRepositories();
     const l = new FixedWindowRateLimiter(2, 60_000);
     const ctx = { ipKey: "9.9.9.9" };
-    expect((await submitLead(validLead, ctx, { repos, limiter: l })).ok).toBe(true);
-    expect((await submitLead(validLead, ctx, { repos, limiter: l })).ok).toBe(true);
-    expect(await submitLead(validLead, ctx, { repos, limiter: l })).toMatchObject({ ok: false, reason: "rate_limited" });
-    expect((await submitLead(validLead, { ipKey: "8.8.8.8" }, { repos, limiter: l })).ok).toBe(true);
+    const lead = (email: string) => ({ ...validLead, email });
+    for (let i = 0; i < 5; i++) {
+      expect(await submitLead({ ...validLead, contactConsent: "" }, ctx, { repos, limiter: l })).toMatchObject({ reason: "validation" });
+    }
+    expect((await submitLead(lead("a@example.com"), ctx, { repos, limiter: l })).ok).toBe(true);
+    expect((await submitLead(lead("b@example.com"), ctx, { repos, limiter: l })).ok).toBe(true);
+    expect(await submitLead(lead("c@example.com"), ctx, { repos, limiter: l })).toMatchObject({ ok: false, reason: "rate_limited" });
+    // Same contact from new IPs is still limited by the contact key.
+    expect((await submitLead(lead("a@example.com"), { ipKey: "8.8.8.8" }, { repos, limiter: l })).ok).toBe(true);
+    expect(await submitLead(lead("A@example.com"), { ipKey: "7.7.7.7" }, { repos, limiter: l })).toMatchObject({ reason: "rate_limited" });
   });
 
   it("never logs personal data", async () => {
@@ -268,5 +312,35 @@ describe("staff-only lead access", () => {
     expect(w.lead).toMatchObject({ status: "withdrawn", email: null, name: "[erased]", consent: { contactConsent: false } });
     expect(w.lead.retentionUntil > w.lead.createdAt).toBe(true);
     expect(await updateLeadStatus("missing", "contacted", { repos, requireStaff: staff })).toMatchObject({ ok: false, error: "not_found" });
+  });
+
+  it("only admins can withdraw (erase) a lead", async () => {
+    const repos = createFixtureRepositories();
+    const r = await submitLead(validLead, { ipKey: "a" }, { repos, limiter: new FixedWindowRateLimiter(10, 1000) });
+    if (!r.ok) throw new Error("expected ok");
+    expect(await updateLeadStatus(r.leadId, "withdrawn", { repos, requireStaff: advisor })).toMatchObject({ ok: false, error: "forbidden" });
+    expect((await repos.leads.getById(r.leadId))?.email).toBe("buyer@example.com");
+    expect(await updateLeadStatus(r.leadId, "contacted", { repos, requireStaff: advisor })).toMatchObject({ ok: true });
+  });
+
+  it("lists leads with subject summaries and filters by requestType", async () => {
+    const repos = createFixtureRepositories();
+    const l = new FixedWindowRateLimiter(10, 1000);
+    await repos.externalListings.upsertMany([listing("ext-1")]);
+    await submitLead(validLead, { ipKey: "a" }, { repos, limiter: l });
+    await submitLead({ ...validLead, email: "b@example.com", requestType: "buyer_assistance", projectId: "", externalListingId: "ext-1" }, { ipKey: "a" }, { repos, limiter: l });
+    const all = await listLeads({}, { repos, requireStaff: staff });
+    expect(all).toHaveLength(2);
+    const proj = all.find((x) => x.projectId)!;
+    expect(proj.subject).toEqual({ kind: "project", id: "sample-proj-lakeview", name: "SAMPLE Lakeview Residences", slug: "sample-lakeview-residences", available: true });
+    const ext = all.find((x) => x.externalListingId)!;
+    expect(ext.subject).toMatchObject({
+      kind: "external_listing", id: "ext-1", title: "SAMPLE ext-1", sourceId: "sample-feed",
+      sourceName: expect.stringMatching(/SAMPLE Feed/), canonicalUrl: "https://example.com/sample/ext-1",
+      discoveredAt: "2026-10-01T00:00:00.000Z", lastSeenAt: null, available: true,
+    });
+    const onlyVerification = await listLeads({ requestType: "verification" }, { repos, requireStaff: staff });
+    expect(onlyVerification.map((x) => x.requestType)).toEqual(["verification"]);
+    expect((await getLead(proj.id, { repos, requireStaff: staff }))?.subject?.kind).toBe("project");
   });
 });

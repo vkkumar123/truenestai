@@ -79,21 +79,25 @@ async function getSupabaseStaffSession(): Promise<StaffSession | null> {
 // ---------------------------------------------------------------------------
 async function getFixtureStaffSession(now: Date): Promise<StaffSession | null> {
   if (!fixtureAdminAllowed()) return null;
-  let secret: string;
-  try {
-    secret = sessionSecret();
-  } catch {
-    return null;
-  }
+  const secret = sessionSecret(); // ConfigError is logged + mapped to null by getStaffSession
   const token = (await cookies()).get(FIXTURE_SESSION_COOKIE)?.value;
   const payload = verifySessionToken(token, secret, now);
   if (!payload) return null;
   return { userId: payload.sub, role: payload.role, mode: "fixture", expiresAt: new Date(payload.exp * 1000).toISOString() };
 }
 
-/** Current staff session, or null. Never throws for a missing/invalid session. */
+/**
+ * Current staff session, or null. Never throws: a missing/invalid session, a configuration error
+ * (logged as auth.misconfigured) or an auth-service failure all yield null (deny).
+ */
 export async function getStaffSession(now: Date = new Date()): Promise<StaffSession | null> {
-  return dataBackend() === "supabase" ? getSupabaseStaffSession() : getFixtureStaffSession(now);
+  try {
+    return dataBackend() === "supabase" ? await getSupabaseStaffSession() : await getFixtureStaffSession(now);
+  } catch (e) {
+    if (e instanceof ConfigError) log.error("auth.misconfigured", { reason: e.message });
+    else log.error("auth.session_check_failed", { reason: e instanceof Error ? e.name : "unknown" });
+    return null;
+  }
 }
 
 /** Resolves to the staff session or throws StaffAuthError("unauthenticated"). */

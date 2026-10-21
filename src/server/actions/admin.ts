@@ -4,15 +4,10 @@ import { redirect } from "next/navigation";
 import { dataBackend } from "../env";
 import { loginWithDevPassword, loginWithSupabasePassword, logoutStaff } from "../auth";
 import type { AdminLoginState } from "./types";
+import { safeAdminPath } from "../redirects";
 
-const DEFAULT_ADMIN_HOME = "/admin/leads";
 const LOGIN_PATH = "/admin/login";
 
-/** Only same-site /admin paths are allowed as a post-login destination (no open redirects). */
-function safeAdminPath(raw: FormDataEntryValue | null): string {
-  const p = typeof raw === "string" ? raw.trim() : "";
-  return /^\/admin(\/[A-Za-z0-9\-_/]*)?$/.test(p) && !p.includes("//") ? p : DEFAULT_ADMIN_HOME;
-}
 
 /**
  * Staff sign-in. Use with `useActionState(adminLoginAction, { status: "idle" })`.

@@ -4,7 +4,6 @@ import type { ConstructionStatus, ExternalListing, Project } from "@/domain/type
 import { BHK_OPTIONS, CONSTRUCTION_STATUS_OPTIONS, SEARCH_LANES, type BhkOption, type SearchLane } from "@/domain/search-options";
 import { getLocality } from "@/config/markets";
 import {
-  defaultAdapters,
   discoverExternalWithReport,
   type DiscoverOptions,
   type DiscoveryAdapter,
@@ -70,7 +69,7 @@ export interface SearchDeps {
   repos?: Repositories;
   discover?: (query: DiscoveryQuery, opts: DiscoverOptions) => Promise<Pick<DiscoveryReport, "listings" | "errors">>;
   minResearched?: number;
-  /** Lane B adapters (default: discovery's defaultAdapters()). */
+  /** Lane B adapters (default: discovery's own defaults). */
   adapters?: DiscoveryAdapter[];
 }
 
@@ -115,35 +114,24 @@ export async function searchProperties(raw: SearchQuery = {}, deps: SearchDeps =
     notes.push(LANE_B_FILTER_NOTE);
   }
 
-  // Match Lane B against published projects found BY RERA NUMBER (no project-count cap), plus
-  // the returned researched results, so a listing for a known project carries matchedProjectId
-  // even under lane=external. The adapters are wrapped to look up candidates from each raw
-  // batch's RERA numbers; discovery reads `projects` only after all adapters finish (dedupe),
-  // which a unit test guards. The match itself is still made by discovery's dedupe.
-  const matchPool: Project[] = researched.filter((p) => p.published === true);
-  const projectById = new Map(matchPool.map((p) => [p.id, p]));
-  const addCandidates = (found: Project[]) => {
-    for (const p of found) {
-      if (p.published !== true || projectById.has(p.id)) continue;
-      projectById.set(p.id, p);
-      matchPool.push(p);
-    }
+  // Match Lane B against published projects found BY RERA NUMBER (no project-count cap), plus the
+  // returned researched results, so a listing for a known project carries matchedProjectId even
+  // under lane=external. Discovery calls resolveProjectsByRera once with the normalised numbers;
+  // the match itself is made by discovery's dedupe.
+  const projectById = new Map(researched.filter((p) => p.published === true).map((p) => [p.id, p]));
+  const resolveProjectsByRera = async (numbers: string[]): Promise<Project[]> => {
+    const found = (await repos.projects.findPublishedProjectsByRera(numbers)).filter((p) => p.published === true);
+    for (const p of found) if (!projectById.has(p.id)) projectById.set(p.id, p);
+    return found;
   };
-  const withReraLookup = (a: DiscoveryAdapter): DiscoveryAdapter => ({
-    sourceId: a.sourceId,
-    search: async (query) => {
-      const raws = await a.search(query);
-      const numbers = raws.map((x) => x.reraNumber).filter((x): x is string => typeof x === "string" && x.trim() !== "");
-      if (numbers.length) addCandidates(await repos.projects.findPublishedProjectsByRera(numbers));
-      return raws;
-    },
-  });
 
   const discover = deps.discover ?? discoverExternalWithReport;
   let report: Pick<DiscoveryReport, "listings" | "errors">;
   try {
-    const adapters = (deps.adapters ?? defaultAdapters()).map(withReraLookup);
-    report = await discover({ localityId: q.localityId, text, limit }, { projects: matchPool, adapters });
+    report = await discover(
+      { localityId: q.localityId, text, limit },
+      { projects: [...projectById.values()], resolveProjectsByRera, ...(deps.adapters ? { adapters: deps.adapters } : {}) },
+    );
   } catch (e) {
     log.error("search.discovery_failed", { reason: e instanceof Error ? e.name : "unknown" });
     return done({ researched, external: [], externalQueried: true, externalErrors: ["External listings are unavailable right now."], matchedProjects: {} });
@@ -172,7 +160,11 @@ export async function searchProperties(raw: SearchQuery = {}, deps: SearchDeps =
 
   const result: SearchResult = { researched, external, externalQueried: true, matchedProjects };
   if (report.errors.length) {
-    result.externalErrors = report.errors.map((err) => `Source "${err.sourceId}" could not be reached; its listings are not shown.`);
+    result.externalErrors = report.errors.map((err) =>
+      err.sourceId === "resolveProjectsByRera"
+        ? "Researched-project matching is unavailable right now; external listings may repeat researched projects."
+        : `Source "${err.sourceId}" could not be reached; its listings are not shown.`,
+    );
     log.warn("search.discovery_source_errors", { sources: report.errors.map((e) => e.sourceId) });
   }
   return done(result);

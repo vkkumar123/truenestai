@@ -76,3 +76,8 @@ Format: context → decision → consequences. Status: `accepted` unless noted. 
 | Q10 | K-RERA automated access permission | Manual staff lookup only | M5 automation |
 
 No legal or regulatory facts are asserted in these docs; any statement about RERA, DPDP or source terms needs the owner or qualified counsel to confirm it.
+
+## D12 — M3 staff research write-model — accepted (2026-10-21)
+- **Context:** Staff must add facts with evidence and move them through verification before a project is published.
+- **Decision:** Editable fact fields are `address`, `reraNumbers`, `constructionStatus`, `declaredPossession` (units/regulatory records/documents follow in later slices). Every edit needs ≥ 1 https `SourceRef` with an observed date; each change writes a `FactAuditEvent`. Advisors may add facts (always `unverified`) and mark `disputed`/`requires_professional_review`; only admins may set `source_confirmed`/`reviewed` and publish/unpublish. Automated actors can never verify or publish. Publish rules live in `src/research/publish.ts` (assumption pending owner approval).
+- **Document upload to Storage** is deferred to M2 (needs Supabase Storage); M3 records document metadata only.

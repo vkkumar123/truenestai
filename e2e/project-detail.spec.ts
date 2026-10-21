@@ -22,8 +22,10 @@ test.describe("J2 project detail", () => {
   });
 
   test("an unpublished project is not reachable", async ({ page }) => {
-    const res = await page.goto(`/projects/${UNPUBLISHED.slug}`);
-    expect(res?.status()).toBe(404);
+    // With streaming the not-found page may be served with status 200: assert on content.
+    await page.goto(`/projects/${UNPUBLISHED.slug}`);
+    await expect(page.getByRole("heading", { level: 1, name: /(project|page) not found/i })).toBeVisible();
     await expect(page.getByText(UNPUBLISHED.name)).toHaveCount(0);
+    await expect(page.getByText("SAMPLE-RERA-0099")).toHaveCount(0);
   });
 });

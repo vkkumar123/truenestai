@@ -47,6 +47,19 @@ test.describe("J4 Lane B (externally discovered)", () => {
     await expect(page.getByRole("link", { name: /request verification/i }).first()).toBeVisible();
   });
 
+  for (const [query, title] of [
+    ["locality=yelahanka", /SAMPLE Lakeview Residency/],
+    ["locality=devanahalli", /SAMPLE Orchard Greens.*fictional/],
+    ["q=Residency", /SAMPLE Lakeview Residency/],
+  ] as const) {
+    test(`Lane B also appears, labelled, for ${query}`, async ({ page }) => {
+      await page.goto(`/projects?${query}`);
+      await expect(page.getByText(title).first()).toBeVisible();
+      await expect(page.getByText(/not verified by TrueNest/i).first()).toBeVisible();
+      await expect(page.locator('a[target="_blank"][href^="https://example."]').first()).toBeVisible();
+    });
+  }
+
   test("the Lane B label never appears on researched (Lane A) cards", async ({ page }) => {
     await page.goto(`/projects?locality=${LANE_B_LOCALITY}`);
     const laneA = page.getByRole("link", { name: LANE_A_IN_LANE_B_LOCALITY }).first();

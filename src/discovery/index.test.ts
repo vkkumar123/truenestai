@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { Project } from "@/domain/types";
 import { createFixtureAdapter } from "./adapters/fixture-adapter";
 import { discoverExternal, discoverExternalWithReport, discoverSampleSync, NOT_VERIFIED, type DiscoveryAdapter } from "./index";
 
@@ -46,5 +47,31 @@ describe("discoverExternal", () => {
     expect(r.listings.map((l) => l.sourceRecordId)).toEqual(["OK"]);
     expect(r.errors).toHaveLength(1);
     expect(r.errors[0].message).toMatch(/BAD.*https/);
+  });
+  describe("resolveProjectsByRera hook", () => {
+    const fv = <T,>(value: T) => ({ status: "known" as const, value, verification: "unverified" as const, sources: [] });
+    const project = {
+      id: "sample-project-1", name: "SAMPLE Researched (fictional)", developer: { id: "d", name: "SAMPLE Developer Q", isSample: true },
+      reraNumbers: fv(["SAMPLE-RERA-0001"]), address: fv(null), location: { lat: 0, lng: 0, precision: "locality_centroid" },
+    } as unknown as Project;
+
+    it("is called once with the batch's RERA numbers and sets matchedProjectId", async () => {
+      const calls: string[][] = [];
+      const r = await discoverExternalWithReport({}, {
+        env: "test", now,
+        resolveProjectsByRera: async (nums) => (calls.push(nums), [project]),
+      });
+      expect(calls).toEqual([["SAMPLE-RERA-0001"]]);
+      expect(r.listings.find((l) => l.sourceRecordId === "SAMPLE-001")!.matchedProjectId).toBe("sample-project-1");
+      expect(r.listings.filter((l) => l.matchedProjectId)).toHaveLength(1);
+    });
+    it("isolates hook errors", async () => {
+      const r = await discoverExternalWithReport({}, {
+        env: "test", now,
+        resolveProjectsByRera: async () => { throw new Error("db down"); },
+      });
+      expect(r.listings).toHaveLength(4);
+      expect(r.errors).toEqual([{ sourceId: "resolveProjectsByRera", message: "db down" }]);
+    });
   });
 });

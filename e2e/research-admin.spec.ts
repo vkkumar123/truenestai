@@ -2,12 +2,10 @@
 // admin review → publish → public visibility → audit history; advisor restrictions; Lane B
 // "Researched version available" link.
 //
-// DRAFT: written while /admin/projects/[id] was still being built. Every UI assumption about the
-// project detail page is collected in `ui` below so it can be adjusted in one place.
+// Selectors target src/app/admin/projects/[id]/page.tsx and src/components/admin/*.
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { E2E_ADMIN_DEV_PASSWORD, E2E_ADVISOR_DEV_PASSWORD, PROJECT_LAKEVIEW } from "./support";
 
-test.describe.configure({ mode: "serial" });
 
 const STAMP = Date.now().toString(36);
 const PROJECT_NAME = `SAMPLE E2E Research Residency ${STAMP}`;
@@ -15,141 +13,167 @@ const DEVELOPER = "SAMPLE Developer E2E";
 const RERA = "SAMPLE-RERA-0901";
 const ADDRESS = "SAMPLE Research Road 9, Hebbal (fictional)";
 const SOURCE_URL = "https://example.com/sample/e2e-research";
-const OBSERVED_DATE = "2026-10-01";
 
 let projectUrl = ""; // /admin/projects/<id>, captured after creation
 
+type Field = "address" | "reraNumbers" | "constructionStatus" | "declaredPossession";
+
 const ui = {
-  /** Section of the staff project page for one fact, found by its heading. */
-  factSection: (page: Page, label: RegExp) =>
-    page.locator("section, fieldset, [role=group]").filter({ has: page.getByRole("heading", { name: label }) }).first(),
-  address: /^address/i,
-  rera: /RERA/i,
-  status: /construction status/i,
-  publishButton: (page: Page) => page.getByRole("button", { name: /^publish/i }),
-  blockers: (page: Page) => page.getByRole("region", { name: /blockers|publish readiness/i }).or(page.getByText(/blocker/i)).first(),
-  audit: (page: Page) => page.getByRole("region", { name: /audit|history/i }).or(page.locator("section").filter({ has: page.getByRole("heading", { name: /audit|history/i }) })).first(),
+  /** Fact card on /admin/projects/[id] (Card id="fact-<field>"). */
+  fact: (page: Page, field: Field) => page.locator(`#fact-${field}`),
+  publishing: (page: Page) => page.getByRole("region", { name: "Publishing" }),
+  history: (page: Page) => page.getByRole("region", { name: "Change history" }),
 };
 
 async function signIn(page: Page, password: string) {
   await page.goto("/admin/login");
   await page.getByLabel(/password/i).fill(password);
   await page.getByRole("button", { name: /sign in/i }).click();
-  await expect(page).toHaveURL(/\/admin(\/|$)/);
   await expect(page).not.toHaveURL(/\/admin\/login/);
+  await expect(page.getByRole("navigation", { name: "Staff" })).toBeVisible();
 }
 
-/** Fill a fact form inside `section`: known value + one https source with an observed date. */
-async function saveFact(section: Locator, fill: (s: Locator) => Promise<void>) {
-  const known = section.getByRole("radio", { name: /^known/i });
-  if (await known.count()) await known.check();
-  await fill(section);
-  await section.getByLabel(/source (id|name)/i).first().fill("sample-e2e-source");
-  await section.getByLabel(/source url|url/i).first().fill(SOURCE_URL);
-  await section.getByLabel(/observed/i).first().fill(OBSERVED_DATE);
-  await section.getByRole("button", { name: /save|update fact|set fact/i }).first().click();
-  await expect(section.getByText(/saved|updated/i).first()).toBeVisible();
+/** Opens "Edit fact and sources", marks Known, fills the value and source 1, and saves. */
+async function saveFact(page: Page, field: Field, fill: (value: Locator) => Promise<void>) {
+  const card = ui.fact(page, field);
+  await card.getByText("Edit fact and sources").click();
+  await card.getByRole("radio", { name: /^Known/ }).check();
+  await fill(card.locator(`#${field}-value`));
+  await card.locator(`#${field}-s0-id`).fill("sample-e2e-source");
+  await card.locator(`#${field}-s0-url`).fill(SOURCE_URL);
+  // Observed-at defaults to request time; exercise the client-side "Now" button explicitly.
+  const observed = card.locator(`#${field}-s0-obs`);
+  await observed.fill("");
+  await card.getByRole("button", { name: "Now" }).first().click();
+  await expect(observed).toHaveValue(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  await card.getByRole("button", { name: "Save fact" }).click();
+  await expect(card.getByRole("status")).toBeVisible();
+  await expect(card.getByRole("alert")).toHaveCount(0);
 }
 
-async function setVerification(section: Locator, label: RegExp) {
-  const option = await matchOption(section, label);
-  expect(option, `verification option matching ${label}`).not.toBeNull();
-  await section.getByLabel(/verification/i).first().selectOption({ label: option! });
-  await section.getByRole("button", { name: /update verification|change verification|set verification|update/i }).first().click();
+async function setVerification(page: Page, field: Field, label: string) {
+  const card = ui.fact(page, field);
+  await card.getByLabel("Change verification to").selectOption({ label });
+  await card.getByRole("button", { name: "Update verification" }).click();
+  await expect(card.getByRole("status").first()).toBeVisible();
 }
 
-async function matchOption(section: Locator, label: RegExp): Promise<string | null> {
-  const opts = await section.getByLabel(/verification/i).first().locator("option").allTextContents();
-  return opts.find((o) => label.test(o)) ?? null;
+/** Public search for the project's name finds no card/link (the query itself is echoed on the page). */
+async function expectNotPublic(page: Page) {
+  await page.goto(`/projects?q=${encodeURIComponent(PROJECT_NAME)}&lane=researched`);
+  await expect(page.getByText(/^0 results/)).toBeVisible();
+  await expect(page.getByRole("link", { name: PROJECT_NAME })).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Researched by TrueNest" }).getByText(PROJECT_NAME)).toHaveCount(0);
 }
 
-test.describe("M3 research workflow (admin)", () => {
-  test("admin creates a project: listed as unpublished, absent from /projects", async ({ page }) => {
+/** Fails with a specific message if a staff action bounced us to the login page. */
+async function expectStillSignedIn(page: Page, what: string) {
+  expect(new URL(page.url()).pathname, `${what}: redirected to login (getStaffSession returned null after a server action?)`).not.toBe(
+    "/admin/login",
+  );
+}
+
+test.describe.serial("M3 research workflow (admin)", () => {
+  // Later tests (and the advisor test below) depend on this project; workers: 1 keeps file order.
+  test("admin creates a project: client redirect to its page, listed as unpublished, absent from /projects", async ({ page }) => {
     await signIn(page, E2E_ADMIN_DEV_PASSWORD);
-    await page.goto("/admin/projects/new");
+    await page.goto("/admin/projects");
+    await page.getByRole("link", { name: "New project" }).click();
+    await expect(page).toHaveURL(/\/admin\/projects\/new$/);
     await page.getByLabel("Project name").fill(PROJECT_NAME);
     await page.getByLabel("Developer name").fill(DEVELOPER);
     await page.getByLabel("Locality").selectOption("hebbal");
     await page.getByRole("button", { name: /create project/i }).click();
-    await expect(page).toHaveURL(/\/admin\/projects\/[^/]+$/);
-    await expect(page).not.toHaveURL(/\/new$/);
+    // Client-side router.push after the action succeeds.
+    await expect(page).toHaveURL(/\/admin\/projects\/(?!new$)[^/]+$/);
     projectUrl = new URL(page.url()).pathname;
     await expect(page.getByRole("heading", { level: 1, name: PROJECT_NAME })).toBeVisible();
-    await expect(page.getByText(/not yet found/i).first()).toBeVisible();
+    await expect(page.getByText("Unpublished").first()).toBeVisible();
+    await expect(ui.fact(page, "reraNumbers").getByText(/not yet found/i).first()).toBeVisible();
+    await expect(ui.fact(page, "reraNumbers").getByText(/add at least one source before changing verification/i)).toBeVisible();
 
     await page.goto("/admin/projects");
     const row = page.getByRole("row").filter({ hasText: PROJECT_NAME });
     await expect(row).toHaveCount(1);
     await expect(row.getByText("Unpublished")).toBeVisible();
     await expect(row.getByText(/\d+ blockers?/)).toBeVisible();
+    await expect(row.getByText("Sample data")).toHaveCount(0);
 
-    await page.goto(`/projects?q=${encodeURIComponent(PROJECT_NAME)}&lane=researched`);
-    await expect(page.getByText(PROJECT_NAME)).toHaveCount(0);
+    await expectNotPublic(page);
   });
 
-  test("admin adds facts with https sources; publish is blocked with blockers shown", async ({ page }) => {
+  test("admin adds facts with https sources; publish is refused with blockers shown", async ({ page }) => {
     test.skip(!projectUrl, "depends on the create test");
     await signIn(page, E2E_ADMIN_DEV_PASSWORD);
     await page.goto(projectUrl);
 
-    await saveFact(ui.factSection(page, ui.status), async (s) => {
-      await s.getByLabel(/value|construction status/i).first().selectOption("under_construction");
+    await saveFact(page, "constructionStatus", async (v) => {
+      await v.selectOption("under_construction");
     });
-    await saveFact(ui.factSection(page, ui.rera), (s) => s.getByLabel(/value|registration/i).first().fill(RERA));
-    await saveFact(ui.factSection(page, ui.address), (s) => s.getByLabel(/value|address/i).first().fill(ADDRESS));
+    await saveFact(page, "reraNumbers", (v) => v.fill(RERA));
+    await saveFact(page, "address", (v) => v.fill(ADDRESS));
 
     await page.reload();
-    await expect(page.getByText(RERA).first()).toBeVisible();
-    await expect(page.getByText(ADDRESS).first()).toBeVisible();
-    // Every edited fact starts unverified.
-    await expect(ui.factSection(page, ui.rera).getByText("Unverified").first()).toBeVisible();
-
-    // RERA is unverified -> publishing is blocked and the blocker is explained.
-    await expect(page.getByText(/reraNumbers: must be source_confirmed or reviewed|RERA.*(source confirmed|reviewed)/i).first()).toBeVisible();
-    const publish = ui.publishButton(page);
-    if (await publish.isEnabled()) {
-      await publish.click();
-      await expect(page.getByText(/not ready to publish/i).first()).toBeVisible();
-    } else {
-      await expect(publish).toBeDisabled();
+    for (const [field, text] of [["reraNumbers", RERA], ["address", ADDRESS], ["constructionStatus", "Under construction"]] as const) {
+      const card = ui.fact(page, field);
+      await expect(card.getByText(text).first()).toBeVisible();
+      await expect(card.getByText("Unverified").first()).toBeVisible();
+      await expect(card.locator(`a[href="${SOURCE_URL}"]`).first()).toBeAttached();
     }
-    await page.goto(`/projects?q=${encodeURIComponent(PROJECT_NAME)}&lane=researched`);
-    await expect(page.getByText(PROJECT_NAME)).toHaveCount(0);
+
+    const publishing = ui.publishing(page);
+    await expect(publishing.getByText("Blocking publication")).toBeVisible();
+    await expect(publishing.getByText("reraNumbers: must be source_confirmed or reviewed")).toBeVisible();
+    await publishing.getByRole("button", { name: "Publish" }).click();
+    await expectStillSignedIn(page, "refused publish");
+    await expect(publishing.getByRole("alert").filter({ hasText: /not ready to publish/i })).toBeVisible();
+    await expect(page.getByText("Unpublished").first()).toBeVisible();
+
+    await expectNotPublic(page);
   });
 
   test("admin marks RERA reviewed, publishes, and the project is public with per-fact badges", async ({ page }) => {
     test.skip(!projectUrl, "depends on the create test");
     await signIn(page, E2E_ADMIN_DEV_PASSWORD);
     await page.goto(projectUrl);
-    await setVerification(ui.factSection(page, ui.rera), /^reviewed/i);
-    await expect(ui.factSection(page, ui.rera).getByText("Reviewed").first()).toBeVisible();
+    await setVerification(page, "reraNumbers", "Reviewed");
+    await page.reload();
+    await expect(ui.fact(page, "reraNumbers").getByText("Reviewed").first()).toBeVisible();
+    await expect(ui.publishing(page).getByText("Ready to publish")).toBeVisible();
 
-    await ui.publishButton(page).click();
-    await expect(page.getByText(/^published$/i).first()).toBeVisible();
+    await ui.publishing(page).getByRole("button", { name: "Publish" }).click();
+    await expectStillSignedIn(page, "publish");
+    await expect(ui.publishing(page).getByRole("status")).toBeVisible();
+    await page.reload();
+    await expect(page.getByText("Published").first()).toBeVisible();
+    await expect(page.getByRole("link", { name: "View public page" })).toBeVisible();
 
     await page.goto(`/projects?q=${encodeURIComponent(PROJECT_NAME)}&lane=researched`);
     const card = page.getByRole("link", { name: PROJECT_NAME }).first();
     await expect(card).toBeVisible();
     await card.click();
     await expect(page.getByRole("heading", { level: 1, name: PROJECT_NAME })).toBeVisible();
-    await expect(page.getByText(RERA).first()).toBeVisible();
-    await expect(page.getByText("Reviewed").first()).toBeVisible(); // RERA
-    await expect(page.getByText("Unverified").first()).toBeVisible(); // address / construction status
-    await expect(page.getByText(/RERA registration is not (proof of clear title|title clearance)/i).first()).toBeVisible();
-    // Staff-created projects are not sample data.
-    await expect(page.getByRole("main").getByText(/^Sample data$/)).toHaveCount(0);
+    const main = page.getByRole("main");
+    await expect(main.getByText(RERA).first()).toBeVisible();
+    await expect(main.getByText("Reviewed").first()).toBeVisible(); // RERA
+    await expect(main.getByText("Unverified").first()).toBeVisible(); // address / construction status
+    await expect(main.getByText(/RERA registration is not (proof of clear title|title clearance)/i).first()).toBeVisible();
+    await expect(main.getByText(/^Sample data$/)).toHaveCount(0); // staff-created, not a fixture
   });
 
-  test("audit history lists creation, fact edits, verification change and publish", async ({ page }) => {
+  test("history lists creation, fact edits, the verification change and publish", async ({ page }) => {
     test.skip(!projectUrl, "depends on the create test");
     await signIn(page, E2E_ADMIN_DEV_PASSWORD);
     await page.goto(projectUrl);
-    const audit = ui.audit(page);
-    await expect(audit).toBeVisible();
-    for (const re of [/created/i, /fact.?set|fact (added|updated|changed)/i, /verification.?changed|verification/i, /published/i]) {
-      await expect(audit.getByText(re).first()).toBeVisible();
-    }
-    await expect(audit.getByText(/fixture-dev-admin|admin/).first()).toBeVisible();
+    const history = ui.history(page);
+    await expect(history).toBeVisible();
+    const rows = history.getByRole("row");
+    await expect(rows.filter({ hasText: /created/ })).toHaveCount(1);
+    await expect(rows.filter({ hasText: /fact set/ })).toHaveCount(3);
+    await expect(rows.filter({ hasText: /verification changed/ }).filter({ hasText: "Unverified → Reviewed" })).toHaveCount(1);
+    await expect(rows.filter({ hasText: /^(?!.*unpublished).*published/ })).toHaveCount(1);
+    await expect(rows.filter({ hasText: "RERA registration numbers" }).first()).toBeVisible();
+    await expect(rows.filter({ hasText: "admin" }).first()).toBeVisible();
   });
 });
 
@@ -157,19 +181,25 @@ test.describe("M3 advisor restrictions", () => {
   test("advisor sees no Publish control and cannot choose Reviewed / Source confirmed", async ({ page }) => {
     test.skip(!projectUrl, "depends on the create test");
     await signIn(page, E2E_ADVISOR_DEV_PASSWORD);
+    await expect(page.getByRole("navigation", { name: "Staff" }).locator("..").getByText("advisor")).toBeVisible();
     await page.goto(projectUrl);
+    await expectStillSignedIn(page, "advisor opening project");
     await expect(page.getByRole("heading", { level: 1, name: PROJECT_NAME })).toBeVisible();
-    await expect(page.getByRole("button", { name: /^(publish|unpublish)/i })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /^(Publish|Unpublish)$/ })).toHaveCount(0);
+    await expect(ui.publishing(page).getByText("Only an admin can publish or unpublish.")).toBeVisible();
 
-    for (const label of [ui.rera, ui.address, ui.status]) {
-      const select = ui.factSection(page, label).getByLabel(/verification/i).first();
-      if (!(await select.count())) continue;
-      for (const forbidden of ["Reviewed", "Source confirmed"]) {
-        const opt = select.locator("option", { hasText: new RegExp(`^${forbidden}`) });
-        const n = await opt.count();
-        for (let i = 0; i < n; i++) await expect(opt.nth(i)).toBeDisabled();
+    for (const field of ["reraNumbers", "address", "constructionStatus"] as const) {
+      const card = ui.fact(page, field);
+      await expect(card.getByText("Only an admin can mark a fact Source confirmed or Reviewed.")).toBeVisible();
+      const select = card.getByLabel("Change verification to");
+      if (await select.count()) {
+        const labels = await select.locator("option").allTextContents();
+        expect(labels, field).not.toContain("Reviewed");
+        expect(labels, field).not.toContain("Source confirmed");
       }
     }
+    // Advisors can still edit facts (always saved as Unverified).
+    await expect(ui.fact(page, "address").getByText("Edit fact and sources")).toBeVisible();
   });
 });
 

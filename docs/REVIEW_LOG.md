@@ -27,3 +27,15 @@ New (low), carried to M2 backlog:
 - N3: per-contact rate limit keys on `email ?? phone`; key every present contact value.
 
 Still carried to M2: M3 advisor assignment scoping, M6 Supabase session refresh, L2 dev-login throttle, L9 `is_published_project` RPC exposure.
+
+## M3 — review round 1 (2026-10-21)
+Input: diff 7e3ea8b..HEAD; check 267, test:db 33/33, build, e2e 34/34.
+Verdict: **CHANGES REQUIRED** (0 critical, 1 high, 3 medium, 8 low).
+
+| ID | Sev | Finding | Plan |
+|---|---|---|---|
+| H1 | high | Verification applies to the current fact, not the version the reviewer saw (stale tab confirms an unseen RERA value) | fix now: version token + conditional update + test |
+| M1 | med | Change and audit event not atomic | fix now: single transaction RPCs in Supabase; fixture writes audit first-then-apply with rollback |
+| M2 | med | Readiness check then publish is check-then-act | fix now: publish re-checks inside one transaction (RPC with row lock); fixture is single-threaded |
+| M3 | med | D13: advisor edits to published legal facts go live; advisor can clear a dispute | fix now: D13 revised (auto-unpublish when an edit makes a published project fail readiness; disputed→unverified admin-only); owner asked to confirm |
+| L1–L8 | low | free-text sourceId vs FK, automated-actor check is nominal, workaround runs pre-auth and in prod, lastCheckedAt bumped by publish/verify, malformed id 500, history hides actor id, Lane B match cap 50, developer reuse by name | L1, L3–L8 fix now; L2 documented (workers never hold a staff session) |

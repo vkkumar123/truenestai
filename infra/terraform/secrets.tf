@@ -9,6 +9,7 @@ locals {
       SUPABASE_URL              = "supabase-url"
       SUPABASE_ANON_KEY         = "supabase-anon-key"
       SUPABASE_SERVICE_ROLE_KEY = "supabase-service-role-key"
+      SESSION_SECRET            = "session-secret"
     }
   }
 

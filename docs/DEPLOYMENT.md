@@ -34,6 +34,8 @@ In fixture mode the hosted site shows SAMPLE data only, keeps leads in one insta
      read -rsp "truenest-staging-$s: " v; echo
      printf %s "$v" | gcloud secrets versions add "truenest-staging-$s" --data-file=-
    done
+   # SESSION_SECRET: random, generated here and never shown
+   openssl rand -base64 48 | tr -d '\n' | gcloud secrets versions add truenest-staging-session-secret --data-file=-
    ```
    (The secrets exist only after `data_backend = "supabase"` is applied, so do step 2 first with `secrets_ready = false`, then this, then step 3.)
 2. In `infra/terraform/terraform.tfvars` set `data_backend = "supabase"` for staging and run `~/bin/terraform apply` (from `infra/terraform`).

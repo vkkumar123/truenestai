@@ -79,14 +79,6 @@ export function leadRateLimit(env: NodeJS.ProcessEnv = process.env): { max: numb
   };
 }
 
-/** Failed staff sign-ins allowed per client IP per window (email key: 5× this). */
-export function loginRateLimit(env: NodeJS.ProcessEnv = process.env): { max: number; windowMs: number } {
-  return {
-    max: intEnv(env.LOGIN_MAX_ATTEMPTS, 10, 1, 1000, "LOGIN_MAX_ATTEMPTS"),
-    windowMs: intEnv(env.LOGIN_WINDOW_SECONDS, 900, 1, 86400, "LOGIN_WINDOW_SECONDS") * 1000,
-  };
-}
-
 export const MIN_SESSION_SECRET_LENGTH = 32;
 export const MIN_ADMIN_DEV_PASSWORD_LENGTH = 12;
 

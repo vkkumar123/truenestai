@@ -23,11 +23,7 @@ export default defineConfig({
     trace: "retain-on-failure",
     navigationTimeout: 60_000,
   },
-  projects: [
-    // Signs in once per staff role (the sign-in action is throttled); specs reuse the sessions.
-    { name: "setup", testMatch: /auth\.setup\.ts$/, use: { ...devices["Desktop Chrome"] } },
-    { name: "chromium", use: { ...devices["Desktop Chrome"] }, dependencies: ["setup"] },
-  ],
+  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
     command: `npx next dev -p ${PORT}`,
     url: BASE_URL,

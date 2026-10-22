@@ -88,6 +88,3 @@ No legal or regulatory facts are asserted in these docs; any statement about RER
 
 ## D14 — Workaround for Next 16.4 dev-mode cookies() invariant after no-JS action posts — accepted (2026-10-21)
 - A failed, non-revalidating server action posted without JS leaves the request in the action phase; `cookies()` then throws an InvariantError in dev. Staff actions call `ensureRenderPhaseAfterAction()` (`src/server/actions/mpa.ts`) which revalidates the admin path. `getStaffSession()` now rethrows unexpected errors instead of treating them as signed-out. Remove the workaround when Next fixes it upstream.
-
-## D15 — Document metadata visibility — accepted (2026-10-22)
-- Document metadata (title, kind, version, date, source URL) on a **published** project is public as soon as staff upload it; the file itself stays private (staff-only signed URLs). Any staff role may upload. Accepted for M2 because only staff can upload and published projects are admin-controlled; a per-document review flag (admin-approved before public display) is planned with the document-review slice. Raised as L3 in the M2 review.

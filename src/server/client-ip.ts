@@ -1,6 +1,4 @@
 import "server-only";
-import { headers } from "next/headers";
-import { trustedProxyHops } from "./env";
 
 /**
  * Client IP from an X-Forwarded-For header WITHOUT trusting client-supplied entries.
@@ -26,12 +24,3 @@ export function clientIpFromForwardedFor(header: string | null | undefined, trus
 
 /** Shared bucket used when no X-Forwarded-For header is present. */
 export const UNKNOWN_CLIENT_KEY = "unknown";
-
-/**
- * Rate-limit key for the current request (inside a Server Action / route handler): the client IP
- * per clientIpFromForwardedFor + TRUSTED_PROXY_HOPS, or UNKNOWN_CLIENT_KEY (one shared bucket).
- */
-export async function requestClientKey(): Promise<string> {
-  const h = await headers();
-  return clientIpFromForwardedFor(h.get("x-forwarded-for"), trustedProxyHops()) ?? UNKNOWN_CLIENT_KEY;
-}

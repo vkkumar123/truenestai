@@ -34,22 +34,15 @@ Journeys J1–J7 from `PRODUCT_SPEC.md`.
 - [x] Tests: unit (repositories, lead validation, consent, admin guard, compare limit) and e2e (J1–J7).
 - [x] No secrets, no real data; reviewer PASS.
 
-## M2 — Supabase persistence + Auth live — **code done 2026-10-22** (review PASS); live verification pending — **owner: R2, R7**
-- [x] Migrations for projects, facts/sources, external listings, leads, consent, source registry, staff roles.
-- [x] RLS: anon reads published rows only; anon cannot read leads; staff roles scoped; `test:db` covers each policy.
-- [x] Supabase repositories pass the same contract tests as fixtures.
-- [x] Staff login via Supabase Auth; dev credential path unused in supabase mode.
-- [x] Service-role key server-only (bundle check in CI).
-- [x] Carried from M1 review: advisor lead-assignment scoping (M3), Supabase session refresh in proxy (M6), dev-login throttle (L2), `is_published_project` RPC exposure (L9), Lane B matching under `lane=external` (N1), developer-name text search parity (N2), per-contact rate-limit keys (N3). N1–N3 done in M3.
-- [x] Carried from M3 review: R1 expected-from check under lock, R2 completeness inside RPC, R3 auto-unpublish message flag, R4 publish-rule parity test + seed registry ids into `sources`.
-- [x] Document upload to Storage with versioning (from M3).
-- [x] Review fixes: SAMPLE seed blocked on production (`--mark-production`), unused `authenticated` lead grants revoked, failure-only login throttle, upload cleanup safety, fixture sources out of reference seed, staff list admin-only.
-- [ ] Live run against the owner's Supabase: migrate, `--mark-production` (staging excepted), reference seed, invite staff, smoke test sign-in/refresh/upload/download/assign.
-
-## M2.5 — On-demand research (owner requirement 2026-10-22) — **owner: R3 + source approval**
-- [ ] A search with no DB match queues a research job; the worker uses only registry-`approved` sources (choice pending with owner) and stores results as Lane B unverified records with source URL and dates; later searches read from the DB.
-- [ ] Staff review promotes records to researched (Lane A); nothing legally significant is published without review.
-- [ ] No SAMPLE data in production; buyer UI shows a "research in progress" state for queued searches.
+## M2 — Supabase persistence + Auth live — **owner: R2, R7**
+- [ ] Migrations for projects, facts/sources, external listings, leads, consent, source registry, staff roles.
+- [ ] RLS: anon reads published rows only; anon cannot read leads; staff roles scoped; `test:db` covers each policy.
+- [ ] Supabase repositories pass the same contract tests as fixtures.
+- [ ] Staff login via Supabase Auth; dev credential path unused in supabase mode.
+- [ ] Service-role key server-only (bundle check in CI).
+- [ ] Carried from M1 review: advisor lead-assignment scoping (M3), Supabase session refresh in proxy (M6), dev-login throttle (L2), `is_published_project` RPC exposure (L9), Lane B matching under `lane=external` (N1), developer-name text search parity (N2), per-contact rate-limit keys (N3). N1–N3 done in M3.
+- [ ] Carried from M3 review: R1 expected-from check under lock, R2 completeness inside RPC, R3 auto-unpublish message flag, R4 publish-rule parity test + seed registry ids into `sources`.
+- [ ] Document upload to Storage with versioning (from M3).
 
 ## M3 — Manual research tooling for staff — **done 2026-10-21** (review PASS; Storage upload moved to M2)
 - [x] Admin forms to create or edit a project and add facts, each requiring ≥ 1 `SourceRef` (URL or document, observed date).

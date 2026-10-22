@@ -1,7 +1,7 @@
 // J5 request · J6 consent-aware lead capture · J7 protected admin
 // Serial: the admin journey reads the lead submitted earlier (in-memory fixture store, one dev server).
 import { expect, test, type Page } from "@playwright/test";
-import { E2E_ADMIN_DEV_PASSWORD, LANE_B_LOCALITY, applyStaffSession, LANE_B_TITLE, PROJECT_LAKEVIEW } from "./support";
+import { E2E_ADMIN_DEV_PASSWORD, LANE_B_LOCALITY, LANE_B_TITLE, PROJECT_LAKEVIEW } from "./support";
 
 test.describe.configure({ mode: "serial" });
 
@@ -10,10 +10,10 @@ const BUYER_EMAIL = "e2e.buyer@example.com";
 const VERIFY_NAME = `E2E Verifier ${Date.now().toString(36)}`;
 const SAMPLE_PHONE = "6000000001"; // obviously fictional SAMPLE number
 
-/** Reuses the admin session saved by auth.setup.ts (the sign-in form is throttled). */
 async function signIn(page: Page) {
-  await applyStaffSession(page, "admin");
-  await page.goto("/admin/leads");
+  await page.goto("/admin/login");
+  await page.getByLabel(/password/i).fill(E2E_ADMIN_DEV_PASSWORD);
+  await page.getByRole("button", { name: /sign in/i }).click();
   await expect(page.getByRole("heading", { name: /buyer requests/i })).toBeVisible();
 }
 
@@ -99,12 +99,8 @@ test.describe("J7 admin", () => {
   });
 
   test("the dev password signs in and the submitted lead is listed", async ({ page }) => {
-    // Real form sign-in (most other staff tests reuse the session from auth.setup.ts).
-    await page.goto("/admin/login");
-    await page.getByLabel(/password/i).fill(E2E_ADMIN_DEV_PASSWORD);
-    await page.getByRole("button", { name: /sign in/i }).click();
+    await signIn(page);
     await expect(page).toHaveURL(/\/admin\/leads/);
-    await expect(page.getByRole("heading", { name: /buyer requests/i })).toBeVisible();
     await expect(page.getByText(BUYER_NAME).first()).toBeVisible();
     // Admin pages must not be indexed.
     const robots = await page.locator('meta[name="robots"]').getAttribute("content");

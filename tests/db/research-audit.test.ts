@@ -82,20 +82,15 @@ d("fact_review_events", () => {
   });
 
   const SRC = `'[{"sourceId":"sample-feed","url":"https://example.com/a","observedAt":"2026-10-01T00:00:00Z","documentDate":"2026-09-01"}]'`;
-  const setFact = (field: string, value: string, verification = "unverified") =>
-    `select public.research_set_fact('p1', '${field}', 'known', '${value}', '${verification}', ${SRC}, '${STAFF_UID}', 'admin') as r`;
-  /** research_set_verification(project, field, fact_id, expected_from, to, actor, role, note) */
-  const verify = (field: string, from: string, to: string, actor = "u", role = "admin", note: string | null = null) =>
-    `select public.research_set_verification('p1', '${field}', $1, '${from}', '${to}', '${actor}', '${role}', ${note === null ? "null" : `'${note}'`}) as r`;
-  const currentId = async (q: Client, field: string) =>
-    (await q.query("select id from facts where project_id = 'p1' and field = $1 and is_current", [field])).rows[0].id as string;
+  const setFact = (field: string, value: string, completeness = 0.2, verification = "unverified") =>
+    `select public.research_set_fact('p1', '${field}', 'known', '${value}', '${verification}', ${SRC}, ${completeness}, '${STAFF_UID}', 'admin') as r`;
 
-  /** Makes p1 publish-ready inside the current transaction (3 of 5 completeness points). */
+  /** Makes p1 publish-ready inside the current transaction. */
   async function makeReady(q: Client) {
-    await q.query(setFact("address", '"SAMPLE Road 1"'));
-    await q.query(setFact("rera_numbers", '["TEST/REG/0001"]'));
-    await q.query(setFact("construction_status", '"under_construction"'));
-    await q.query(verify("rera_numbers", "unverified", "source_confirmed", STAFF_UID), [await currentId(q, "rera_numbers")]);
+    await q.query(setFact("rera_numbers", '["TEST/REG/0001"]', 0.4));
+    await q.query(setFact("construction_status", '"under_construction"', 0.6));
+    const { rows } = await q.query("select id from facts where project_id = 'p1' and field = 'rera_numbers' and is_current");
+    await q.query(`select public.research_set_verification('p1', 'rera_numbers', $1, 'source_confirmed', '${STAFF_UID}', 'admin', null)`, [rows[0].id]);
   }
 
   it("write RPCs are service-role only", async () => {
@@ -134,7 +129,7 @@ d("fact_review_events", () => {
       let err: string | null = null;
       try {
         await q.query(`select public.research_set_fact('p1', 'address', 'known', '"x"', 'unverified',
-          '[{"sourceId":"sample-feed","url":"http://insecure","observedAt":"2026-10-01T00:00:00Z"}]', 'u', 'admin')`);
+          '[{"sourceId":"sample-feed","url":"http://insecure","observedAt":"2026-10-01T00:00:00Z"}]', 0, 'u', 'admin')`);
       } catch (e) {
         err = (e as { code?: string }).code ?? null;
       }
@@ -153,21 +148,17 @@ d("fact_review_events", () => {
       await q.query(setFact("address", '"SAMPLE Road 9"'));
       const old = (await q.query("select id from facts where project_id = 'p1' and is_current")).rows[0].id;
       await q.query(setFact("address", '"SAMPLE Road 10"')); // another tab edited it
-      const stale = (await q.query(verify("address", "unverified", "reviewed"), [old])).rows[0].r;
+      const stale = (await q.query(`select public.research_set_verification('p1', 'address', $1, 'reviewed', 'u', 'admin', null) as r`, [old])).rows[0].r;
       const cur = (await q.query("select id from facts where project_id = 'p1' and is_current")).rows[0].id;
-      // R1: right fact id, but the reviewer saw a different verification than is stored now
-      const staleFrom = (await q.query(verify("address", "reviewed", "source_confirmed"), [cur])).rows[0].r;
-      const ok = (await q.query(verify("address", "unverified", "reviewed", "u", "admin", "checked"), [cur])).rows[0].r;
+      const ok = (await q.query(`select public.research_set_verification('p1', 'address', $1, 'reviewed', 'u', 'admin', 'checked') as r`, [cur])).rows[0].r;
       return {
         stale,
-        staleFrom,
         ok,
         verification: (await q.query("select verification from facts where id = $1", [cur])).rows[0].verification,
         audit: (await q.query("select from_verification, to_verification, note from fact_review_events where action = 'verification_changed'")).rows,
       };
     });
     expect(r.stale).toEqual({ status: "conflict" });
-    expect(r.staleFrom).toEqual({ status: "conflict" });
     expect(r.ok).toMatchObject({ status: "ok", from: "unverified", auto_unpublished: false });
     expect(r.verification).toBe("reviewed");
     expect(r.audit).toEqual([{ from_verification: "unverified", to_verification: "reviewed", note: "checked" }]);
@@ -200,15 +191,16 @@ d("fact_review_events", () => {
       await makeReady(q);
       await q.query("select public.research_set_published('p1', true, 'u', 'admin')");
       // address edit keeps readiness → stays published
-      const keep = (await q.query(setFact("address", '"SAMPLE Road 9"'))).rows[0].r;
+      const keep = (await q.query(setFact("address", '"SAMPLE Road 9"', 0.8))).rows[0].r;
       // RERA re-edit resets verification → not ready → auto-unpublished
-      const drop = (await q.query(setFact("rera_numbers", '["TEST/REG/0002"]'))).rows[0].r;
+      const drop = (await q.query(setFact("rera_numbers", '["TEST/REG/0002"]', 0.8))).rows[0].r;
       const afterEdit = (await q.query("select published from projects where id = 'p1'")).rows[0].published;
       // republish path: verify again, publish, then dispute construction status
-      await q.query(verify("rera_numbers", "unverified", "reviewed"), [await currentId(q, "rera_numbers")]);
+      const rera = (await q.query("select id from facts where project_id = 'p1' and field = 'rera_numbers' and is_current")).rows[0].id;
+      await q.query(`select public.research_set_verification('p1', 'rera_numbers', $1, 'reviewed', 'u', 'admin', null)`, [rera]);
       await q.query("select public.research_set_published('p1', true, 'u', 'admin')");
-      const cs = await currentId(q, "construction_status");
-      const dispute = (await q.query(verify("construction_status", "unverified", "disputed", STAFF_UID, "advisor", "conflicting reports"), [cs])).rows[0].r;
+      const cs = (await q.query("select id from facts where project_id = 'p1' and field = 'construction_status' and is_current")).rows[0].id;
+      const dispute = (await q.query(`select public.research_set_verification('p1', 'construction_status', $1, 'disputed', '${STAFF_UID}', 'advisor', 'conflicting reports') as r`, [cs])).rows[0].r;
       return {
         keep,
         drop,

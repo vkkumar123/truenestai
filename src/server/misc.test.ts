@@ -71,34 +71,3 @@ describe("domain helpers", () => {
     expect(bhkMatches("12 BHK", "1")).toBe(false);
   });
 });
-
-describe("login throttle (L2)", async () => {
-  const { createLoginLimiters, isLoginThrottled, recordLoginFailure, EMAIL_LIMIT_FACTOR } = await import("./services/login-throttle");
-  const { loginRateLimit } = await import("./env");
-
-  it("counts only failures, per IP, and resets after the window", () => {
-    const l = createLoginLimiters(3, 1000);
-    const k = { ipKey: "1.2.3.4", now: 0 };
-    for (let i = 0; i < 10; i++) expect(isLoginThrottled(k, l)).toBe(false); // checks alone never count
-    for (let i = 0; i < 3; i++) recordLoginFailure(k, l);
-    expect(isLoginThrottled(k, l)).toBe(true);
-    expect(isLoginThrottled({ ipKey: "5.6.7.8", now: 0 }, l)).toBe(false);
-    expect(isLoginThrottled({ ...k, now: 1001 }, l)).toBe(false);
-  });
-
-  it("the per-email key has a higher limit than the IP key (case-insensitive)", () => {
-    const l = createLoginLimiters(2, 1000);
-    const total = 2 * EMAIL_LIMIT_FACTOR;
-    for (let i = 0; i < total - 1; i++) recordLoginFailure({ ipKey: `ip-${i}`, email: i % 2 ? "Staff@Example.com" : "staff@example.com ", now: 0 }, l);
-    expect(isLoginThrottled({ ipKey: "fresh", email: "staff@example.com", now: 0 }, l)).toBe(false);
-    recordLoginFailure({ ipKey: "another", email: "staff@example.com", now: 0 }, l);
-    expect(isLoginThrottled({ ipKey: "fresh", email: "STAFF@example.com", now: 0 }, l)).toBe(true);
-    expect(isLoginThrottled({ ipKey: "fresh", email: "other@example.com", now: 0 }, l)).toBe(false);
-  });
-
-  it("reads LOGIN_MAX_ATTEMPTS / LOGIN_WINDOW_SECONDS with defaults 10 / 900", () => {
-    expect(loginRateLimit({} as NodeJS.ProcessEnv)).toEqual({ max: 10, windowMs: 900_000 });
-    expect(loginRateLimit({ LOGIN_MAX_ATTEMPTS: "4", LOGIN_WINDOW_SECONDS: "60" } as unknown as NodeJS.ProcessEnv)).toEqual({ max: 4, windowMs: 60_000 });
-    expect(() => loginRateLimit({ LOGIN_MAX_ATTEMPTS: "0" } as unknown as NodeJS.ProcessEnv)).toThrow();
-  });
-});

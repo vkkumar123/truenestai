@@ -5,7 +5,7 @@ import type { Project } from "@/domain/types";
 import { isStaffAuthError } from "../auth";
 import { log } from "../log";
 import { changeVerification, createProject, setPublished, updateFact, type ResearchResult } from "../services/research";
-import { AUTO_UNPUBLISHED_MESSAGE, type ResearchActionState } from "./types";
+import type { ResearchActionState } from "./types";
 import { ensureRenderPhaseAfterAction } from "./mpa";
 
 // Staff research actions for useActionState: `useActionState(action, { status: "idle" })`.
@@ -55,8 +55,7 @@ async function run(
       message: success(r),
       projectId: r.project.id,
       slug: r.project.slug,
-      autoUnpublished: r.autoUnpublished === true,
-      ...(r.autoUnpublished ? { autoUnpublishedMessage: AUTO_UNPUBLISHED_MESSAGE } : {}),
+      ...(r.autoUnpublished ? { autoUnpublished: true } : {}),
     };
   } catch (e) {
     if (isStaffAuthError(e)) return { status: "error", error: "unauthenticated", message: e.message };
@@ -64,6 +63,8 @@ async function run(
     return { status: "error", error: "unavailable", message: "Something went wrong. Please try again." };
   }
 }
+
+const AUTO_UNPUBLISHED_MESSAGE = " The project no longer passes publish checks and was unpublished until an admin re-verifies it.";
 
 /** Fields: name, developerId? (existing developer) or developerName (creates a new one), localityId, lat?, lng?. */
 export async function createProjectAction(_prev: ResearchActionState, formData: FormData): Promise<ResearchActionState> {
@@ -80,15 +81,12 @@ export async function updateFactAction(_prev: ResearchActionState, formData: For
   return run(
     "update_fact",
     () => updateFact(formEntries(formData)),
-    () => "Fact saved as unverified.",
+    (r) => "Fact saved as unverified." + (r.autoUnpublished ? AUTO_UNPUBLISHED_MESSAGE : ""),
     (p, r) => p.published || r.autoUnpublished === true,
   );
 }
 
-/**
- * Fields: projectId, field, to (verification state), expectedVersion (from
- * getStaffProjectView.factVersions), expectedFrom? (the verification state the reviewer saw), note?.
- */
+/** Fields: projectId, field, to (verification state), expectedVersion (from getStaffProjectView.factVersions), note?. */
 export async function changeVerificationAction(_prev: ResearchActionState, formData: FormData): Promise<ResearchActionState> {
   const f = formObject(formData);
   return run(
@@ -99,10 +97,9 @@ export async function changeVerificationAction(_prev: ResearchActionState, formD
         field: f.field ?? "",
         to: f.to ?? "",
         expectedVersion: f.expectedVersion ?? "",
-        expectedFrom: f.expectedFrom || undefined,
         note: f.note ?? null,
       }),
-    () => "Verification updated.",
+    (r) => "Verification updated." + (r.autoUnpublished ? AUTO_UNPUBLISHED_MESSAGE : ""),
     (p, r) => p.published || r.autoUnpublished === true,
   );
 }

@@ -1,7 +1,3 @@
-import { readFileSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { expect, type Browser, type Page } from "@playwright/test";
 // Shared constants for e2e journeys. Test-only values: they unlock nothing outside the
 // in-memory fixture backend running under `next dev` (see playwright.config.ts).
 export const E2E_ADMIN_DEV_PASSWORD = "e2e-admin-password-123";
@@ -27,32 +23,3 @@ export const FIVE_PROJECT_IDS = [
   "sample-proj-courtyard",
   "sample-proj-riverside",
 ];
-
-// ---------------------------------------------------------------------------
-// Staff sessions. The sign-in action is throttled (10 attempts / 15 min per client, see
-// src/server/services/login-throttle.ts), so specs reuse sessions saved once by
-// e2e/auth.setup.ts instead of signing in through the UI in every test. Only the tests that are
-// about the login form itself use the form.
-// ---------------------------------------------------------------------------
-
-export type StaffRoleName = "admin" | "advisor";
-export const AUTH_DIR = path.join(os.tmpdir(), "truenest-e2e-auth");
-export const authStatePath = (role: StaffRoleName) => path.join(AUTH_DIR, `${role}.json`);
-export const STAFF_PASSWORD: Record<StaffRoleName, string> = { admin: E2E_ADMIN_DEV_PASSWORD, advisor: E2E_ADVISOR_DEV_PASSWORD };
-
-/** Adds the saved staff session cookie for `role` to this page's context. */
-export async function applyStaffSession(page: Page, role: StaffRoleName) {
-  type Cookies = Awaited<ReturnType<ReturnType<Page["context"]>["cookies"]>>;
-  const state = JSON.parse(readFileSync(authStatePath(role), "utf8")) as { cookies: Cookies };
-  await page.context().clearCookies();
-  await page.context().addCookies(state.cookies);
-}
-
-/** A separate browser context signed in as `role` (for multi-user journeys). */
-export async function staffContext(browser: Browser, role: StaffRoleName) {
-  const context = await browser.newContext({ storageState: authStatePath(role) });
-  const page = await context.newPage();
-  await page.goto("/admin/leads");
-  await expect(page.getByRole("navigation", { name: "Staff" })).toBeVisible();
-  return { context, page };
-}

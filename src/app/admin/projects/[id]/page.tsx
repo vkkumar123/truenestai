@@ -14,7 +14,6 @@ import { Alert, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { FactEditForm, type SourceDraft } from "@/components/admin/fact-edit-form";
-import { DOCUMENT_KIND_LABELS, DocumentUploadForm } from "@/components/admin/document-upload-form";
 import { PublishForm } from "@/components/admin/publish-form";
 import { VerificationForm } from "@/components/admin/verification-form";
 import { CONSTRUCTION_STATUS_LABEL, formatDate, formatPercent, NOT_YET_FOUND, VERIFICATION_LABEL } from "@/components/property/format";
@@ -143,7 +142,7 @@ async function ProjectContent({ params }: { params: PageProps<"/admin/projects/[
                   {fact.sources.length === 0 ? (
                     <p className="text-sm text-muted-foreground">Add at least one source before changing verification.</p>
                   ) : options.length ? (
-                    <VerificationForm projectId={project.id} field={field} options={options} expectedVersion={factVersions[field]} expectedFrom={fact.verification} />
+                    <VerificationForm projectId={project.id} field={field} options={options} expectedVersion={factVersions[field]} />
                   ) : (
                     <p className="text-sm text-muted-foreground">No verification changes are available to your role from this state.</p>
                   )}
@@ -176,8 +175,6 @@ async function ProjectContent({ params }: { params: PageProps<"/admin/projects/[
           );
         })}
       </section>
-
-      <DocumentsSection project={project} sourceOptions={sourceOptions} />
 
       <AuditTable audit={audit} />
     </div>
@@ -213,62 +210,6 @@ function PublishPanel({ project, readiness, isAdmin }: { project: Project; readi
         <p className="text-sm text-muted-foreground">Only an admin can publish or unpublish.</p>
       )}
       <p className="text-xs text-muted-foreground">Publish rules are a proposed default pending owner approval.</p>
-    </section>
-  );
-}
-
-function DocumentsSection({ project, sourceOptions }: { project: Project; sourceOptions: { id: string; name: string }[] }) {
-  const groups = new Map<string, Project["documents"]>();
-  for (const d of project.documents) {
-    const key = `${d.kind}:${d.title}`;
-    groups.set(key, [...(groups.get(key) ?? []), d]);
-  }
-  return (
-    <section aria-labelledby="docs-heading" className="space-y-3">
-      <h2 id="docs-heading" className="text-lg font-semibold">
-        Documents
-      </h2>
-      <div className="rounded-lg border border-border bg-surface p-4">
-        {project.documents.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No documents recorded yet.</p>
-        ) : (
-          <ul className="divide-y divide-border">
-            {[...groups.values()].map((docs) => {
-              const sorted = [...docs].sort((a, b) => b.version - a.version);
-              return (
-                <li key={sorted[0].id} className="space-y-1 py-3 text-sm">
-                  <p className="flex flex-wrap items-center gap-2 font-medium">
-                    {sorted[0].title}
-                    <Badge tone="outline">{DOCUMENT_KIND_LABELS[sorted[0].kind] ?? sorted[0].kind}</Badge>
-                  </p>
-                  <ul className="space-y-1 pl-4">
-                    {sorted.map((d, i) => (
-                      <li key={d.id} className="flex flex-wrap items-center gap-x-2">
-                        <span className="font-medium">Version {d.version}</span>
-                        {i === 0 && sorted.length > 1 ? <span className="text-muted-foreground">(latest)</span> : null}
-                        <span className="text-muted-foreground">
-                          · Document date {d.documentDate ? formatDate(d.documentDate) : "not recorded"} · Source{" "}
-                          <code className="font-mono">{d.source.sourceId}</code>
-                        </span>
-                        {/* Staff-only route; plain <a> so the browser downloads the file. */}
-                        <a href={`/api/staff/documents/${encodeURIComponent(d.id)}`} className="text-primary underline">
-                          Download<span className="sr-only"> version {d.version} of {d.title}</span>
-                        </a>
-                      </li>
-                    ))}
-                  </ul>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </div>
-      <details className="rounded-lg border border-border bg-surface p-4">
-        <summary className="cursor-pointer text-sm font-semibold">Upload a document or new version</summary>
-        <div className="mt-3">
-          <DocumentUploadForm projectId={project.id} sourceOptions={sourceOptions} />
-        </div>
-      </details>
     </section>
   );
 }

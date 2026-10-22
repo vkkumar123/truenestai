@@ -12,12 +12,12 @@ export function ActionFeedback({ state }: { state: ResearchActionState }) {
     return (
       <div className="space-y-2">
         <Alert tone="success" role="status">
-          {state.message}
+          {state.autoUnpublished ? state.message.split(" The project no longer")[0] : state.message}
         </Alert>
         {state.autoUnpublished ? (
           <Alert tone="warning" role="alert" className="border-2">
             <AlertTitle>Project unpublished</AlertTitle>
-            <p>{state.autoUnpublishedMessage ?? AUTO_UNPUBLISHED_NOTICE}</p>
+            <p>{AUTO_UNPUBLISHED_NOTICE}</p>
           </Alert>
         ) : null}
       </div>

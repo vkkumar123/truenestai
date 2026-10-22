@@ -101,10 +101,12 @@ jobs:
             --label org.opencontainers.image.revision="${GITHUB_SHA}" \
             --tag "${IMAGE}:${GITHUB_SHA}" \
             --push \
-            --metadata-file "$RUNNER_TEMP/build.json" \
             .
           rm -f "$key_file"
-          digest=$(jq -r '."containerimage.digest"' "$RUNNER_TEMP/build.json")
+          # Deploy by digest so staging and a later production promotion run the identical image.
+          digest=$(gcloud artifacts docker images describe "${IMAGE}:${GITHUB_SHA}" \
+            --format='value(image_summary.digest)')
+          [ -n "$digest" ] || { echo "::error::Could not resolve the pushed image digest"; exit 1; }
           echo "ref=${IMAGE}@${digest}" >> "$GITHUB_OUTPUT"
 
       - name: Deploy

@@ -6,8 +6,6 @@ node_modules
 coverage
 playwright-report
 test-results
-e2e
-tests
 infra
 docs
 .claude

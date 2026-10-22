@@ -1,0 +1,17 @@
+# Keep the build context small and free of secrets.
+.git
+.github
+.next
+node_modules
+coverage
+playwright-report
+test-results
+infra
+docs
+.claude
+.env*
+!.env.example
+*.pem
+*.tfstate*
+Dockerfile
+.dockerignore

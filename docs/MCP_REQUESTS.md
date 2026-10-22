@@ -31,5 +31,12 @@ Status: `open` | `in_progress` | `done` | `declined`. Nothing here has been conf
 - Purpose: registration, complaint and order lookups for projects.
 - Needed: confirm permitted automated access or obtain an official data channel; until then, manual lookup by staff with recorded URL and date. Details in `docs/research/REGULATORY_SOURCES.md`.
 
-## R7 — Hosting and CI secrets — open
-- Purpose: deploy (e.g. Vercel) and enable GitHub Actions. CI runs on fixtures and needs no secrets.
+## R7 — GCP hosting (Cloud Run) and deploy access — in_progress (bootstrap applied 2026-10-22)
+- Decision: Cloud Run in `asia-south1` + Supabase Mumbai (owner, 2026-10-21). Full guide: `DEPLOYMENT.md`.
+- Needed from owner, once, in Google Cloud Shell for project `truenestai` (Owner role):
+  1. Billing linked to the project.
+  2. Run `bash infra/gcp-bootstrap.sh` from a clone of branch `infra/gcp-cloud-run`. It enables APIs, creates the state bucket `truenestai-tfstate`, and Terraform creates: Artifact Registry `truenest`, runtime SA `truenest-run-staging`, deployer SA `truenest-deployer`, Workload Identity pool `github` + provider `truenestai` (restricted to this repo, owner id 35333263, and the `staging`/`production` GitHub environments), Secret Manager secrets, and Cloud Run `truenest-staging`.
+  3. ~~Add the five printed values as GitHub repository variables~~ Not needed: they are the defaults in `deploy.yml` (done 2026-10-22).
+- Later: Supabase values and a generated SESSION_SECRET into Secret Manager via `gcloud secrets versions add` (never chat or Git); for production a domain, its DNS A record, the `PRODUCTION_URL` variable and required reviewers on the `production` GitHub environment.
+- Minimum permissions: deployer has `artifactregistry.writer` on one repo, `run.developer` on the TrueNest services only, `actAs` on their runtime SAs, and read on the build-key secret. Runtime SAs read only their own environment's secrets. No JSON keys.
+- CI (`ci.yml`) still runs on fixtures and needs nothing.

@@ -91,3 +91,9 @@ No legal or regulatory facts are asserted in these docs; any statement about RER
 
 ## D15 — Document metadata visibility — accepted (2026-10-22)
 - Document metadata (title, kind, version, date, source URL) on a **published** project is public as soon as staff upload it; the file itself stays private (staff-only signed URLs). Any staff role may upload. Accepted for M2 because only staff can upload and published projects are admin-controlled; a per-document review flag (admin-approved before public display) is planned with the document-review slice. Raised as L3 in the M2 review.
+
+## GCP hosting — Cloud Run + Supabase — accepted by owner (2026-10-21)
+- **Context:** The owner wants production on GCP before going live. The schema, RLS (`auth.uid()`), staff auth and document storage are built on Supabase.
+- **Decision:** Run the Next.js app on Cloud Run (`asia-south1`) from a standalone-output container; keep Postgres, Auth and Storage on Supabase (`ap-south-1`). Infra as code in `infra/terraform`; deploys from GitHub Actions via Workload Identity Federation (no keys); secrets in Secret Manager. Custom domains go through a global HTTPS load balancer with Cloud Armor (Cloud Run domain mappings are not offered in `asia-south1`).
+- **Rejected for now:** Cloud SQL + Identity Platform + Cloud Storage, which would rewrite RLS, staff auth and storage before M2. Revisit if data must sit inside GCP.
+- Details: `DEPLOYMENT.md`.

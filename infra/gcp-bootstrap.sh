@@ -30,6 +30,24 @@ if ! gcloud storage buckets describe "gs://${STATE_BUCKET}" >/dev/null 2>&1; the
   gcloud storage buckets update "gs://${STATE_BUCKET}" --versioning
 fi
 
+# Cloud Shell no longer ships Terraform (its `terraform` is a stub that prints install hints and
+# exits 0). Install a pinned binary into ~/bin, which persists across Cloud Shell sessions.
+TF_VERSION="1.9.8"
+TF="${HOME}/bin/terraform"
+if ! "${TF}" version 2>/dev/null | grep -q "^Terraform v${TF_VERSION}"; then
+  echo "==> Installing Terraform ${TF_VERSION} into ~/bin"
+  mkdir -p "${HOME}/bin"
+  tmp="$(mktemp -d)"
+  curl -fsSL -o "${tmp}/tf.zip" \
+    "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_amd64.zip"
+  curl -fsSL -o "${tmp}/SHA256SUMS" \
+    "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_SHA256SUMS"
+  (cd "${tmp}" && grep "_linux_amd64.zip" SHA256SUMS | sed "s/terraform_.*_linux_amd64.zip/tf.zip/" | sha256sum -c -)
+  unzip -o -q "${tmp}/tf.zip" terraform -d "${HOME}/bin"
+  rm -rf "${tmp}"
+fi
+"${TF}" version | head -1
+
 cd "${TF_DIR}"
 if [ ! -f terraform.tfvars ]; then
   sed "s/^project_id = .*/project_id = \"${PROJECT_ID}\"/" terraform.tfvars.example > terraform.tfvars
@@ -37,8 +55,8 @@ if [ ! -f terraform.tfvars ]; then
 fi
 
 echo "==> terraform apply"
-terraform init -input=false -backend-config="bucket=${STATE_BUCKET}"
-terraform apply -input=false
+"${TF}" init -input=false -backend-config="bucket=${STATE_BUCKET}"
+"${TF}" apply -input=false
 
 echo "==> Server Functions encryption key (generated here, never printed)"
 KEY_SECRET="truenest-next-server-actions-key"
@@ -49,7 +67,7 @@ fi
 echo
 echo "==> Done. Add these as GitHub repository VARIABLES (not secrets; none of them is sensitive):"
 echo "    https://github.com/vkkumar123/truenestai/settings/variables/actions"
-terraform output -json github_actions_variables | python3 -c 'import json,sys; [print(f"    {k} = {v}") for k,v in json.load(sys.stdin).items()]'
+"${TF}" output -json github_actions_variables | python3 -c 'import json,sys; [print(f"    {k} = {v}") for k,v in json.load(sys.stdin).items()]'
 echo
 echo "    Staging URL (live after the first deploy):"
-terraform output -json service_urls | python3 -c 'import json,sys; [print(f"    {k}: {v}") for k,v in json.load(sys.stdin).items()]'
+"${TF}" output -json service_urls | python3 -c 'import json,sys; [print(f"    {k}: {v}") for k,v in json.load(sys.stdin).items()]'

@@ -36,8 +36,8 @@ In fixture mode the hosted site shows SAMPLE data only, keeps leads in one insta
    done
    ```
    (The secrets exist only after `data_backend = "supabase"` is applied, so do step 2 first with `secrets_ready = false`, then this, then step 3.)
-2. In `infra/terraform/terraform.tfvars` set `data_backend = "supabase"` for staging and run `terraform apply`.
-3. Set `secrets_ready = true` and run `terraform apply` again. Cloud Run rolls a new revision with the secrets.
+2. In `infra/terraform/terraform.tfvars` set `data_backend = "supabase"` for staging and run `~/bin/terraform apply` (from `infra/terraform`).
+3. Set `secrets_ready = true` and run `~/bin/terraform apply` (from `infra/terraform`) again. Cloud Run rolls a new revision with the secrets.
 
 ## Production
 Add a `production` entry with a `domain` (see `terraform.tfvars.example`), apply, then point the domain's A record at the `dns_records` output. The certificate provisions once DNS resolves (up to ~60 minutes). In GitHub, add required reviewers to the `production` environment and set the `PRODUCTION_URL` variable. Promote with Actions → Deploy → Run workflow → `production`: it reuses the image built and smoke-tested on staging for that commit, smoke-tests through the domain, and rolls traffic back to the previous revision if that fails.

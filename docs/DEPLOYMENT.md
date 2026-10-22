@@ -44,6 +44,14 @@ In fixture mode the hosted site shows SAMPLE data only, keeps leads in one insta
 2. In `infra/terraform/terraform.tfvars` set `data_backend = "supabase"` for staging and run `~/bin/terraform apply` (from `infra/terraform`).
 3. Set `secrets_ready = true` and run `~/bin/terraform apply` (from `infra/terraform`) again. Cloud Run rolls a new revision with the secrets.
 
+## Turning on on-demand research (after the research code is on main)
+In Cloud Shell: `cd ~/truenestai && git fetch -q origin && git checkout -q main && git pull -q && bash infra/gcp-enable-research.sh`. It:
+1. creates `truenest-staging-anthropic-api-key` and `truenest-staging-research-run-secret`, asks for the Anthropic key (hidden input) and generates the run secret;
+2. sets `research_ready = true` and applies, so Cloud Run gets `ANTHROPIC_API_KEY` and `RESEARCH_RUN_SECRET` (request timeout is 300 s for research jobs);
+3. creates the Cloud Scheduler job `truenest-staging-research`, which POSTs to `/api/internal/research/run` every 2 minutes with the `x-research-secret` header. The header value lives in the job config, readable by project owners.
+
+The reference seed (`npm run db:seed`, which adds the `anthropic-web-search` source row) is run from a dev session with `SUPABASE_DB_URL`; Cloud Run never needs the DB URL. Optional tuning env (`ANTHROPIC_MODEL`, `RESEARCH_CACHE_HOURS`, `RESEARCH_MAX_JOBS_PER_DAY`, `RESEARCH_BATCH_SIZE`) keeps the app defaults unless added to `cloud_run.tf`.
+
 ## Production
 Add a `production` entry with a `domain` (see `terraform.tfvars.example`), apply, then point the domain's A record at the `dns_records` output. The certificate provisions once DNS resolves (up to ~60 minutes). In GitHub, add required reviewers to the `production` environment and set the `PRODUCTION_URL` variable. Promote with Actions → Deploy → Run workflow → `production`: it reuses the image built and smoke-tested on staging for that commit, smoke-tests through the domain, and rolls traffic back to the previous revision if that fails.
 

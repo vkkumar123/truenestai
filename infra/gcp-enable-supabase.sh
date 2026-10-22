@@ -8,28 +8,14 @@ set -euo pipefail
 ENV_NAME="${1:-staging}"
 PROJECT_ID="${PROJECT_ID:-truenestai}"
 TF="${HOME}/bin/terraform"
-TF_DIR="$(cd "$(dirname "$0")/terraform" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TF_DIR="${SCRIPT_DIR}/terraform"
 [ -x "${TF}" ] || { echo "!! Run infra/gcp-bootstrap.sh first (it installs Terraform)."; exit 1; }
 gcloud config set project "${PROJECT_ID}" >/dev/null
 cd "${TF_DIR}"
 
-set_tfvar() { # set_tfvar <key> <value> inside the ${ENV_NAME} block of terraform.tfvars
-  python3 - "$ENV_NAME" "$1" "$2" <<'PY'
-import re, sys
-env, key, val = sys.argv[1:]
-s = open("terraform.tfvars").read()
-m = re.search(r'(^\s*' + re.escape(env) + r'\s*=\s*\{)(.*?)(^\s*\})', s, re.S | re.M)
-if not m:
-    sys.exit(f"!! No '{env}' block in terraform.tfvars")
-body = m.group(2)
-line = re.compile(r'^(\s*)' + re.escape(key) + r'\s*=.*$', re.M)
-if line.search(body):
-    body = line.sub(lambda x: f'{x.group(1)}{key} = {val}', body, count=1)
-else:
-    body = body.rstrip("\n") + f"\n    {key} = {val}\n"
-open("terraform.tfvars", "w").write(s[:m.start(2)] + body + s[m.end(2):])
-PY
-}
+# shellcheck source=infra/lib.sh
+source "${SCRIPT_DIR}/lib.sh"
 
 "${TF}" init -input=false -backend-config="bucket=${PROJECT_ID}-tfstate" >/dev/null
 

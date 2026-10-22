@@ -24,7 +24,7 @@ fi
 echo "==> Enabling APIs (first run can take a minute or two)"
 gcloud services enable serviceusage.googleapis.com cloudresourcemanager.googleapis.com \
   storage.googleapis.com secretmanager.googleapis.com iam.googleapis.com iamcredentials.googleapis.com \
-  sts.googleapis.com run.googleapis.com artifactregistry.googleapis.com compute.googleapis.com \
+  sts.googleapis.com run.googleapis.com cloudscheduler.googleapis.com artifactregistry.googleapis.com compute.googleapis.com \
   logging.googleapis.com monitoring.googleapis.com
 
 echo "==> Terraform state bucket gs://${STATE_BUCKET}"

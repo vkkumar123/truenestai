@@ -43,6 +43,8 @@ variable "environments" {
     # Set true once the environment's secrets have values (docs/DEPLOYMENT.md, step 5). Until then
     # the service is not wired to them, because Cloud Run refuses a secret that has no version.
     secrets_ready = optional(bool, false)
+    # Set true once anthropic-api-key and research-run-secret have values (infra/gcp-enable-research.sh).
+    research_ready = optional(bool, false)
   }))
   # Staging only until production is wanted; add a production entry in terraform.tfvars.
   default = {

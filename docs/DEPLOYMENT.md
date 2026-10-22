@@ -28,6 +28,9 @@ No service-account keys exist. Nothing secret is stored in GitHub or Terraform s
 
 ## Switching staging to Supabase (after M2)
 In fixture mode the hosted site shows SAMPLE data only, keeps leads in one instance's memory, and refuses staff sign-in (the dev password login is disabled whenever `NODE_ENV=production`). Real buyer + admin testing needs Supabase:
+
+**Shortcut:** in Cloud Shell run `cd ~/truenestai && git fetch -q origin && git checkout -q main && git pull -q && bash infra/gcp-enable-supabase.sh`. It does the three steps below, asking for each Supabase value with hidden input. The manual steps are:
+
 1. Add each value in Cloud Shell without it touching chat or shell history:
    ```bash
    for s in supabase-url supabase-anon-key supabase-service-role-key; do

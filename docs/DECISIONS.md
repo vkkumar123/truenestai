@@ -88,3 +88,9 @@ No legal or regulatory facts are asserted in these docs; any statement about RER
 
 ## D14 — Workaround for Next 16.4 dev-mode cookies() invariant after no-JS action posts — accepted (2026-10-21)
 - A failed, non-revalidating server action posted without JS leaves the request in the action phase; `cookies()` then throws an InvariantError in dev. Staff actions call `ensureRenderPhaseAfterAction()` (`src/server/actions/mpa.ts`) which revalidates the admin path. `getStaffSession()` now rethrows unexpected errors instead of treating them as signed-out. Remove the workaround when Next fixes it upstream.
+
+## GCP hosting — Cloud Run + Supabase — accepted by owner (2026-10-21)
+- **Context:** The owner wants production on GCP before going live. The schema, RLS (`auth.uid()`), staff auth and document storage are built on Supabase.
+- **Decision:** Run the Next.js app on Cloud Run (`asia-south1`) from a standalone-output container; keep Postgres, Auth and Storage on Supabase (`ap-south-1`). Infra as code in `infra/terraform`; deploys from GitHub Actions via Workload Identity Federation (no keys); secrets in Secret Manager. Custom domains go through a global HTTPS load balancer with Cloud Armor (Cloud Run domain mappings are not offered in `asia-south1`).
+- **Rejected for now:** Cloud SQL + Identity Platform + Cloud Storage, which would rewrite RLS, staff auth and storage before M2. Revisit if data must sit inside GCP.
+- Details: `DEPLOYMENT.md`.

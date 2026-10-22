@@ -1,0 +1,184 @@
+name: Deploy (GCP Cloud Run)
+
+# main or the `staging` branch -> build image, deploy to staging, smoke test. Push any commit to
+# `staging` (git push origin HEAD:staging) to put it on the staging site before it is merged.
+# Manual "production" run -> promote the image already built for that commit, smoke test, and
+# roll traffic back to the previous revision if the smoke test fails.
+# Does nothing until the GCP_* repository variables exist (docs/DEPLOYMENT.md).
+
+on:
+  push:
+    branches: [main, staging]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        type: choice
+        options: [staging, production]
+        default: staging
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.event.inputs.environment || 'staging' }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "22"
+  NEXT_TELEMETRY_DISABLED: "1"
+  IMAGE: ${{ vars.GCP_ARTIFACT_REPOSITORY }}/web
+
+jobs:
+  configured:
+    name: GCP configured?
+    runs-on: ubuntu-latest
+    outputs:
+      ok: ${{ steps.check.outputs.ok }}
+    steps:
+      - id: check
+        run: |
+          if [ -n "${{ vars.GCP_PROJECT_ID }}" ] && [ -n "${{ vars.GCP_WIF_PROVIDER }}" ]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::GCP repository variables are not set yet; skipping deploy (docs/DEPLOYMENT.md)."
+          fi
+
+  verify:
+    name: Typecheck, lint, unit tests
+    needs: configured
+    if: needs.configured.outputs.ok == 'true' && (github.event_name == 'push' || github.event.inputs.environment == 'staging')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DATA_BACKEND: fixture
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+
+  staging:
+    name: Build + deploy staging
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: staging
+      url: ${{ steps.deploy.outputs.url }}
+    permissions:
+      contents: read
+      id-token: write # OIDC token for Workload Identity Federation
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Build and push image
+        id: build
+        run: |
+          gcloud auth configure-docker "${{ vars.GCP_REGION }}-docker.pkg.dev" --quiet
+          key_file="$RUNNER_TEMP/next_actions_key"
+          gcloud secrets versions access latest --secret=truenest-next-server-actions-key \
+            --project="${{ vars.GCP_PROJECT_ID }}" > "$key_file"
+          docker buildx build \
+            --secret id=next_actions_key,src="$key_file" \
+            --build-arg DEPLOYMENT_VERSION="${GITHUB_SHA}" \
+            --label org.opencontainers.image.revision="${GITHUB_SHA}" \
+            --tag "${IMAGE}:${GITHUB_SHA}" \
+            --push \
+            --metadata-file "$RUNNER_TEMP/build.json" \
+            .
+          rm -f "$key_file"
+          digest=$(jq -r '."containerimage.digest"' "$RUNNER_TEMP/build.json")
+          echo "ref=${IMAGE}@${digest}" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy
+        id: deploy
+        run: |
+          gcloud run deploy truenest-staging \
+            --image="${{ steps.build.outputs.ref }}" \
+            --region="${{ vars.GCP_REGION }}" \
+            --project="${{ vars.GCP_PROJECT_ID }}" \
+            --quiet
+          url=$(gcloud run services describe truenest-staging --region="${{ vars.GCP_REGION }}" \
+            --project="${{ vars.GCP_PROJECT_ID }}" --format='value(status.url)')
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test
+        run: |
+          for path in / /projects /compare /request; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "${{ steps.deploy.outputs.url }}${path}")
+            echo "$path -> $code"
+            [ "$code" = "200" ] || { echo "::error::$path returned $code"; exit 1; }
+          done
+
+  production:
+    name: Promote to production
+    needs: configured
+    if: needs.configured.outputs.ok == 'true' && github.event.inputs.environment == 'production'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Add required reviewers to the "production" environment in GitHub so this waits for approval.
+    environment:
+      name: production
+      url: ${{ vars.PRODUCTION_URL }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Resolve the staging-tested image for this commit
+        id: image
+        run: |
+          digest=$(gcloud artifacts docker images describe "${IMAGE}:${GITHUB_SHA}" \
+            --format='value(image_summary.digest)') || {
+            echo "::error::No image for ${GITHUB_SHA}. Deploy this commit to staging first."; exit 1; }
+          echo "ref=${IMAGE}@${digest}" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy
+        id: deploy
+        run: |
+          prev=$(gcloud run services describe truenest-production --region="${{ vars.GCP_REGION }}" \
+            --project="${{ vars.GCP_PROJECT_ID }}" --format='value(status.latestReadyRevisionName)')
+          echo "previous=$prev" >> "$GITHUB_OUTPUT"
+          gcloud run deploy truenest-production \
+            --image="${{ steps.image.outputs.ref }}" \
+            --region="${{ vars.GCP_REGION }}" \
+            --project="${{ vars.GCP_PROJECT_ID }}" \
+            --quiet
+
+      - name: Smoke test (through the load balancer)
+        id: smoke
+        run: |
+          base="${{ vars.PRODUCTION_URL }}"
+          [ -n "$base" ] || { echo "::error::Set the PRODUCTION_URL repository variable"; exit 1; }
+          for path in / /projects /compare /request; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "${base}${path}")
+            echo "$path -> $code"
+            [ "$code" = "200" ] || { echo "::error::$path returned $code"; exit 1; }
+          done
+
+      - name: Roll back on failure
+        if: failure() && steps.deploy.outputs.previous != ''
+        run: |
+          gcloud run services update-traffic truenest-production \
+            --to-revisions="${{ steps.deploy.outputs.previous }}=100" \
+            --region="${{ vars.GCP_REGION }}" \
+            --project="${{ vars.GCP_PROJECT_ID }}"
+          echo "::warning::Traffic rolled back to ${{ steps.deploy.outputs.previous }}"

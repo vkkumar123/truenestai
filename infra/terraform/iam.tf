@@ -7,6 +7,7 @@ resource "google_service_account" "runtime" {
   for_each     = var.environments
   account_id   = "truenest-run-${each.key}"
   display_name = "TrueNest Cloud Run runtime (${each.key})"
+  depends_on   = [google_project_service.enabled]
 }
 
 # ---------------------------------------------------------------------------
@@ -16,6 +17,7 @@ resource "google_service_account" "runtime" {
 resource "google_service_account" "deployer" {
   account_id   = "truenest-deployer"
   display_name = "TrueNest GitHub Actions deployer"
+  depends_on   = [google_project_service.enabled]
 }
 
 resource "google_iam_workload_identity_pool" "github" {

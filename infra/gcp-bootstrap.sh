@@ -19,9 +19,13 @@ if [ "$(gcloud billing projects describe "${PROJECT_ID}" --format='value(billing
   exit 1
 fi
 
-echo "==> Enabling the APIs Terraform needs to start"
+# Enabled here (not only in Terraform) so they have propagated before Terraform creates resources;
+# keep in step with infra/terraform/apis.tf.
+echo "==> Enabling APIs (first run can take a minute or two)"
 gcloud services enable serviceusage.googleapis.com cloudresourcemanager.googleapis.com \
-  storage.googleapis.com secretmanager.googleapis.com
+  storage.googleapis.com secretmanager.googleapis.com iam.googleapis.com iamcredentials.googleapis.com \
+  sts.googleapis.com run.googleapis.com artifactregistry.googleapis.com compute.googleapis.com \
+  logging.googleapis.com monitoring.googleapis.com
 
 echo "==> Terraform state bucket gs://${STATE_BUCKET}"
 if ! gcloud storage buckets describe "gs://${STATE_BUCKET}" >/dev/null 2>&1; then

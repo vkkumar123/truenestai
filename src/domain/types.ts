@@ -193,3 +193,29 @@ export interface Lead extends LeadInput {
   createdAt: string;
   retentionUntil: string;
 }
+
+// ---- M3: staff research write-model (see DECISIONS D12) ----
+
+export type ResearchFactField = "address" | "reraNumbers" | "constructionStatus" | "declaredPossession";
+
+export type StaffRole = "advisor" | "admin";
+
+// Every staff edit or verification change is recorded. actorId is always a human staff id.
+export interface FactAuditEvent {
+  id: string;
+  projectId: string;
+  field: ResearchFactField | "published" | "basics" | "documents";
+  action: "fact_set" | "verification_changed" | "published" | "unpublished" | "basics_updated" | "created" | "document_uploaded";
+  fromVerification: VerificationState | null;
+  toVerification: VerificationState | null;
+  actorId: string;
+  actorRole: StaffRole;
+  at: string;
+  note: string | null;
+}
+
+export interface PublishReadiness {
+  ready: boolean;
+  completeness: number; // 0..1
+  blockers: string[]; // human-readable reasons publishing is blocked
+}

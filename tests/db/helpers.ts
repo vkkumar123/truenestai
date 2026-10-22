@@ -28,15 +28,25 @@ export function migrationFiles(): string[] {
     .map((f) => path.join(MIGRATIONS_DIR, f));
 }
 
-/** Drops and recreates public + auth schemas, then applies the shim and every migration in order. */
-export async function resetAndMigrate(client: Client): Promise<void> {
-  await client.query("drop schema if exists public cascade; drop schema if exists auth cascade;");
+/** Drops public, auth, private and storage schemas, recreates public, applies the Supabase shim. */
+export async function resetSchemas(client: Client): Promise<void> {
+  await client.query(
+    "drop schema if exists public cascade; drop schema if exists auth cascade;" +
+      " drop schema if exists private cascade; drop schema if exists storage cascade;",
+  );
   await client.query("create schema public; grant usage on schema public to public;");
   await client.query(readFileSync(SHIM, "utf8"));
+}
+
+/** resetSchemas, then applies every migration in order (without the runner's ledger). */
+export async function resetAndMigrate(client: Client): Promise<void> {
+  await resetSchemas(client);
   for (const file of migrationFiles()) {
     await client.query(readFileSync(file, "utf8"));
   }
 }
+
+export const REPO_ROOT = ROOT;
 
 export type DbRole = "anon" | "authenticated" | "service_role";
 
@@ -49,9 +59,12 @@ export async function asRole<T>(
   role: DbRole,
   sub: string | null,
   fn: (c: Client) => Promise<T>,
+  /** SQL run as the superuser inside the transaction first (e.g. temporary grants); rolled back. */
+  setup?: string,
 ): Promise<T> {
   await client.query("begin");
   try {
+    if (setup) await client.query(setup);
     await client.query(`set local role ${role}`);
     await client.query("select set_config('request.jwt.claim.sub', $1, true)", [sub ?? ""]);
     return await fn(client);
@@ -67,14 +80,21 @@ export async function errorAs(
   sub: string | null,
   sql: string,
   params: unknown[] = [],
+  setup?: string,
 ): Promise<{ code?: string; message: string } | null> {
-  return asRole(client, role, sub, async (c) => {
-    try {
-      await c.query(sql, params);
-      return null;
-    } catch (err) {
-      const e = err as { code?: string; message: string };
-      return { code: e.code, message: e.message };
-    }
-  });
+  return asRole(
+    client,
+    role,
+    sub,
+    async (c) => {
+      try {
+        await c.query(sql, params);
+        return null;
+      } catch (err) {
+        const e = err as { code?: string; message: string };
+        return { code: e.code, message: e.message };
+      }
+    },
+    setup,
+  );
 }

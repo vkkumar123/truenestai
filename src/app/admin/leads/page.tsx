@@ -2,17 +2,16 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
-import { connection } from "next/server";
 import type { LeadRequestType, LeadStatus } from "@/domain/types";
 import { LEAD_STATUS_LABELS, REQUEST_TYPE_LABELS } from "@/leads/labels";
 import { LEAD_STATUS_TRANSITIONS } from "@/leads/retention";
-import { adminLogoutAction } from "@/server/actions/admin";
-import { getStaffSession, isStaffAuthError } from "@/server/auth";
-import { listLeads, type StaffLeadView } from "@/server/services/leads";
+import { isStaffAuthError } from "@/server/auth";
+import { requireStaffPage } from "../_lib/session";
+import { listAssignableStaff, listLeads, type StaffLeadView } from "@/server/services/leads";
 import { Alert, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { cn } from "@/components/ui/cn";
+import { AssignLeadForm } from "@/components/admin/assign-lead-form";
 import { LeadStatusForm } from "@/components/admin/lead-status-form";
 import { EXTERNAL_LABEL } from "@/components/property/external-card";
 import { formatDate } from "@/components/property/format";
@@ -120,9 +119,7 @@ function Subject({ subject }: { subject: StaffLeadView["subject"] }) {
 }
 
 async function LeadsContent({ searchParams }: { searchParams: PageProps<"/admin/leads">["searchParams"] }) {
-  await connection(); // session checks read cookies and the current time: request-time only
-  const session = await getStaffSession();
-  if (!session) redirect("/admin/login?next=%2Fadmin%2Fleads");
+  const session = await requireStaffPage("/admin/leads");
 
   const sp = await searchParams;
   const rawStatus = typeof sp.status === "string" ? sp.status : "";
@@ -132,8 +129,13 @@ async function LeadsContent({ searchParams }: { searchParams: PageProps<"/admin/
   const isAdmin = session.role === "admin";
 
   let leads: StaffLeadView[];
+  let staff: { userId: string; label: string }[] = [];
   try {
+    // Advisors receive only leads assigned to them (enforced by the service).
     leads = await listLeads({ status, requestType, limit: 200 });
+    if (isAdmin) {
+      staff = (await listAssignableStaff()).map((m) => ({ userId: m.userId, label: `${m.displayName ?? m.userId} (${m.role})` }));
+    }
   } catch (e) {
     if (isStaffAuthError(e)) redirect("/admin/login?next=%2Fadmin%2Fleads");
     throw e;
@@ -148,11 +150,6 @@ async function LeadsContent({ searchParams }: { searchParams: PageProps<"/admin/
             Signed in as <code className="font-mono">{session.userId}</code> ({session.role}, {session.mode} mode)
           </p>
         </div>
-        <form action={adminLogoutAction}>
-          <Button type="submit" variant="secondary" size="sm">
-            Sign out
-          </Button>
-        </form>
       </div>
 
       <div className="space-y-2">
@@ -173,20 +170,29 @@ async function LeadsContent({ searchParams }: { searchParams: PageProps<"/admin/
       </div>
 
       {!isAdmin ? (
-        <p className="text-xs text-muted-foreground">Only an admin can withdraw and erase a lead.</p>
+        <p className="text-xs text-muted-foreground">Only an admin can withdraw and erase a lead. You see the leads assigned to you.</p>
       ) : null}
 
       {leads.length === 0 ? (
         <Alert>
-          <AlertTitle>No requests match these filters</AlertTitle>
-          <p>New buyer requests appear here once submitted with contact consent.</p>
+          {isAdmin ? (
+            <>
+              <AlertTitle>No requests match these filters</AlertTitle>
+              <p>New buyer requests appear here once submitted with contact consent.</p>
+            </>
+          ) : (
+            <>
+              <AlertTitle>No leads assigned to you yet</AlertTitle>
+              <p>An admin assigns buyer requests to advisors. Assigned leads appear here.</p>
+            </>
+          )}
         </Alert>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-border bg-surface" role="region" aria-label="Buyer requests" tabIndex={0}>
-          <table className="w-full min-w-[64rem] text-left text-sm">
+          <table className="w-full min-w-[72rem] text-left text-sm">
             <thead className="border-b border-border text-muted-foreground">
               <tr>
-                {["Created", "Type", "Contact", "About", "Status", "Tier", "Retain until", "Change status"].map((h) => (
+                {["Created", "Type", "Contact", "About", "Status", "Tier", "Assigned to", "Retain until", "Change status"].map((h) => (
                   <th key={h} scope="col" className="p-3 font-medium">
                     {h}
                   </th>
@@ -224,6 +230,15 @@ async function LeadsContent({ searchParams }: { searchParams: PageProps<"/admin/
                       </span>
                     ) : (
                       <span className="text-muted-foreground">Not scored</span>
+                    )}
+                  </td>
+                  <td className="p-3 text-xs">
+                    {isAdmin ? (
+                      <AssignLeadForm leadId={l.id} assignedTo={l.assignedTo ?? null} staff={staff} />
+                    ) : l.assignedTo ? (
+                      l.assignedTo === session.userId ? "You" : l.assignedTo
+                    ) : (
+                      <span className="text-muted-foreground">Unassigned</span>
                     )}
                   </td>
                   <td className="whitespace-nowrap p-3">{formatDate(l.retentionUntil)}</td>

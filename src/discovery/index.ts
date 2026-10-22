@@ -15,6 +15,8 @@ export interface DiscoverOptions {
   adapters?: DiscoveryAdapter[];
   now?: Date;
   projects?: Project[]; // researched projects to match against (RERA only sets matchedProjectId)
+  /** Called once after normalisation with the batch's distinct RERA numbers (skipped if none). Errors go to `errors`. */
+  resolveProjectsByRera?: (reraNumbers: string[]) => Promise<Project[]>;
   registry?: readonly SourceEntry[];
 }
 
@@ -71,7 +73,19 @@ export async function discoverExternalWithReport(query: DiscoveryQuery, opts: Di
     }),
   );
 
-  return { ...finish(batches.flat(), query, opts.projects ?? []), errors, skipped };
+  const records = batches.flat();
+  const projects = [...(opts.projects ?? [])];
+  const reraNumbers = [...new Set(records.map((r) => r.reraNumber).filter((x): x is string => !!x))];
+  if (opts.resolveProjectsByRera && reraNumbers.length) {
+    try {
+      const found = await opts.resolveProjectsByRera(reraNumbers);
+      for (const p of found ?? []) if (!projects.some((q) => q.id === p.id)) projects.push(p);
+    } catch (e) {
+      errors.push({ sourceId: "resolveProjectsByRera", message: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  return { ...finish(records, query, projects), errors, skipped };
 }
 
 /** Listings only. Never throws because of an adapter failure. */

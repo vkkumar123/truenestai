@@ -11,7 +11,14 @@ import { SafeExternalLink } from "./safe-link";
 
 export const EXTERNAL_LABEL = "Externally discovered — not verified by TrueNest";
 
-export function ExternalListingCard({ listing }: { listing: ExternalListing }) {
+export function ExternalListingCard({
+  listing,
+  researchedVersion,
+}: {
+  listing: ExternalListing;
+  /** Set when strong-identifier dedupe matched this listing to a published researched project. */
+  researchedVersion?: { slug: string; name: string };
+}) {
   const sourceName = getSource(listing.sourceId)?.name ?? listing.sourceId;
   const locality = listing.localityId ? getLocality(listing.localityId)?.name ?? listing.localityId : null;
   return (
@@ -59,7 +66,13 @@ export function ExternalListingCard({ listing }: { listing: ExternalListing }) {
           )}
         </div>
       </CardContent>
-      <CardFooter>
+      <CardFooter className="justify-between">
+        {researchedVersion ? (
+          <Link href={`/projects/${researchedVersion.slug}`} className="text-sm font-medium text-primary underline-offset-4 hover:underline">
+            Researched version available<span aria-hidden="true"> →</span>
+            <span className="sr-only">: {researchedVersion.name}</span>
+          </Link>
+        ) : null}
         <Link href={`/request?listing=${encodeURIComponent(listing.id)}&type=verification`} className={buttonVariants({ variant: "secondary", size: "sm" })}>
           Request verification<span className="sr-only"> of {listing.title}</span>
         </Link>

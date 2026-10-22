@@ -1,5 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
-import { E2E_ADMIN_DEV_PASSWORD, E2E_TEST_ONLY_SESSION_SECRET } from "./e2e/support";
+import { E2E_ADMIN_DEV_PASSWORD, E2E_ADVISOR_DEV_PASSWORD, E2E_TEST_ONLY_SESSION_SECRET } from "./e2e/support";
 
 // E2E journeys (J1–J7) run against `next dev` in fixture mode, not `next start`:
 // the dev-only admin password login is refused whenever NODE_ENV=production, and fixture
@@ -23,7 +23,11 @@ export default defineConfig({
     trace: "retain-on-failure",
     navigationTimeout: 60_000,
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [
+    // Signs in once per staff role (the sign-in action is throttled); specs reuse the sessions.
+    { name: "setup", testMatch: /auth\.setup\.ts$/, use: { ...devices["Desktop Chrome"] } },
+    { name: "chromium", use: { ...devices["Desktop Chrome"] }, dependencies: ["setup"] },
+  ],
   webServer: {
     command: `npx next dev -p ${PORT}`,
     url: BASE_URL,
@@ -34,6 +38,7 @@ export default defineConfig({
     env: {
       DATA_BACKEND: "fixture",
       ADMIN_DEV_PASSWORD: E2E_ADMIN_DEV_PASSWORD,
+      ADMIN_DEV_ADVISOR_PASSWORD: E2E_ADVISOR_DEV_PASSWORD,
       SESSION_SECRET: E2E_TEST_ONLY_SESSION_SECRET,
       MIN_RESEARCHED_RESULTS: "3",
       LEAD_RATE_LIMIT_MAX: "100",

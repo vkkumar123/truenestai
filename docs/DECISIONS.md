@@ -76,3 +76,18 @@ Format: context → decision → consequences. Status: `accepted` unless noted. 
 | Q10 | K-RERA automated access permission | Manual staff lookup only | M5 automation |
 
 No legal or regulatory facts are asserted in these docs; any statement about RERA, DPDP or source terms needs the owner or qualified counsel to confirm it.
+
+## D12 — M3 staff research write-model — accepted (2026-10-21)
+- **Context:** Staff must add facts with evidence and move them through verification before a project is published.
+- **Decision:** Editable fact fields are `address`, `reraNumbers`, `constructionStatus`, `declaredPossession` (units/regulatory records/documents follow in later slices). Every edit needs ≥ 1 https `SourceRef` with an observed date; each change writes a `FactAuditEvent`. Advisors may add facts (always `unverified`) and mark `disputed`/`requires_professional_review`; only admins may set `source_confirmed`/`reviewed` and publish/unpublish. Automated actors can never verify or publish. Publish rules live in `src/research/publish.ts` (assumption pending owner approval).
+- **Document upload to Storage** is deferred to M2 (needs Supabase Storage); M3 records document metadata only.
+
+## D13 — Edits to a published project — revised and confirmed by owner (2026-10-21)
+- An edit resets that fact to `unverified`. If, after the edit, a published project no longer passes publish readiness (e.g. RERA numbers changed and are unverified), it is **automatically unpublished** with an audit event (`unpublished`, note "auto: failed readiness after edit") until an admin re-verifies and republishes. Edits that keep readiness (e.g. address) stay live, shown as Unverified. Only admins may clear a `disputed` state.
+- Superseded first version: "edits keep the project published" (rejected in M3 review: legally significant facts could go live unreviewed).
+
+## D14 — Workaround for Next 16.4 dev-mode cookies() invariant after no-JS action posts — accepted (2026-10-21)
+- A failed, non-revalidating server action posted without JS leaves the request in the action phase; `cookies()` then throws an InvariantError in dev. Staff actions call `ensureRenderPhaseAfterAction()` (`src/server/actions/mpa.ts`) which revalidates the admin path. `getStaffSession()` now rethrows unexpected errors instead of treating them as signed-out. Remove the workaround when Next fixes it upstream.
+
+## D15 — Document metadata visibility — accepted (2026-10-22)
+- Document metadata (title, kind, version, date, source URL) on a **published** project is public as soon as staff upload it; the file itself stays private (staff-only signed URLs). Any staff role may upload. Accepted for M2 because only staff can upload and published projects are admin-controlled; a per-document review flag (admin-approved before public display) is planned with the document-review slice. Raised as L3 in the M2 review.

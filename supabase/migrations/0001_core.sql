@@ -472,6 +472,12 @@ select
   p.locality_id,
   p.published,
   p.is_sample,
+  (select d.name from public.developers d where d.id = p.developer_id) as developer_name,
+  -- RERA numbers normalised like src/discovery/dedupe.ts normaliseRera (upper-case, A-Z0-9 only)
+  coalesce((select array_agg(regexp_replace(upper(x), '[^A-Z0-9]', '', 'g'))
+    from public.facts f, jsonb_array_elements_text(case when jsonb_typeof(f.value) = 'array' then f.value else '[]'::jsonb end) x
+    where f.project_id = p.id and f.field = 'rera_numbers' and f.is_current and f.status = 'known' and f.unit_id is null), '{}')
+    as rera_numbers_normalized,
   (select f.value #>> '{}' from public.facts f
     where f.project_id = p.id and f.field = 'construction_status' and f.is_current and f.status = 'known'
     limit 1) as construction_status,

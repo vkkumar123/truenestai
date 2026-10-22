@@ -20,6 +20,7 @@ beforeEach(() => {
   vi.stubEnv("DATA_BACKEND", "fixture");
   vi.stubEnv("SESSION_SECRET", SECRET);
   vi.stubEnv("ADMIN_DEV_PASSWORD", PASSWORD);
+  vi.stubEnv("ADMIN_DEV_ADVISOR_PASSWORD", "");
 });
 afterEach(() => vi.unstubAllEnvs());
 
@@ -99,6 +100,26 @@ describe("fixture admin login", () => {
     expect(set.options).toMatchObject({ httpOnly: true, sameSite: "lax", secure: false, path: "/", maxAge: 8 * 3600 });
     const session = await auth.requireStaff();
     expect(session).toMatchObject({ userId: auth.FIXTURE_ADMIN_USER_ID, role: "admin", mode: "fixture" });
+  });
+
+  it("optional advisor password signs in as a distinct advisor user", async () => {
+    vi.stubEnv("ADMIN_DEV_ADVISOR_PASSWORD", "advisor-password-xyz");
+    const r = await auth.loginWithDevPassword("advisor-password-xyz");
+    expect(r).toMatchObject({ ok: true, session: { userId: auth.FIXTURE_ADVISOR_USER_ID, role: "advisor" } });
+    expect(await auth.requireStaff()).toMatchObject({ role: "advisor", userId: "fixture-dev-advisor" });
+    jar.current = createCookieJar();
+    expect(await auth.loginWithDevPassword(PASSWORD)).toMatchObject({ ok: true, session: { role: "admin" } });
+  });
+
+  it("advisor login is unavailable when unset and refused when invalid or in production", async () => {
+    expect(await auth.loginWithDevPassword("advisor-password-xyz")).toMatchObject({ ok: false, error: "invalid_credentials" });
+    vi.stubEnv("ADMIN_DEV_ADVISOR_PASSWORD", "short");
+    expect(await auth.loginWithDevPassword(PASSWORD)).toMatchObject({ ok: false, error: "misconfigured" });
+    vi.stubEnv("ADMIN_DEV_ADVISOR_PASSWORD", PASSWORD);
+    expect(await auth.loginWithDevPassword(PASSWORD)).toMatchObject({ ok: false, error: "misconfigured" });
+    vi.stubEnv("ADMIN_DEV_ADVISOR_PASSWORD", "advisor-password-xyz");
+    vi.stubEnv("NODE_ENV", "production");
+    expect(await auth.loginWithDevPassword("advisor-password-xyz")).toMatchObject({ ok: false, error: "disabled" });
   });
 
   it("rejects a tampered session cookie", async () => {

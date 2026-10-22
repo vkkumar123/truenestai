@@ -10,14 +10,14 @@ vi.mock("next/headers", () => ({
 const { createFixtureRepositories, SAMPLE_PROJECTS } = await import("../repositories/fixture");
 const { searchProperties } = await import("./search");
 const { getComparison, MAX_COMPARE } = await import("./compare");
-const { submitLead, listLeads, updateLeadStatus, getLead } = await import("./leads");
+const { submitLead, listLeads, updateLeadStatus, getLead, assignLead, listAssignableStaff } = await import("./leads");
 const { FixedWindowRateLimiter } = await import("./rate-limit");
 const { StaffAuthError } = await import("../auth");
 const { CONSENT_TEXT_VERSION } = await import("@/leads/consent");
 
 const UNPUBLISHED = SAMPLE_PROJECTS.find((p) => !p.published)!;
 const staff = async () => ({ userId: "staff-1", role: "admin" as const, mode: "fixture" as const, expiresAt: null });
-const advisor = async () => ({ userId: "staff-2", role: "advisor" as const, mode: "fixture" as const, expiresAt: null });
+const advisor = async () => ({ userId: "fixture-dev-advisor", role: "advisor" as const, mode: "fixture" as const, expiresAt: null });
 const noStaff = async (): Promise<never> => {
   throw new StaffAuthError("unauthenticated");
 };
@@ -179,6 +179,49 @@ describe("searchProperties", () => {
     expect(ext.notes?.[0]).toMatch(/apply only to researched/);
   });
 
+  it("lane=external matches listings to published projects and exposes matchedProjects", async () => {
+    const repos = createFixtureRepositories();
+    const { discoverExternalWithReport } = await import("@/discovery");
+    const r = await searchProperties({ localityId: "hebbal", lane: "external" }, { repos, discover: discoverExternalWithReport });
+    expect(r.researched).toEqual([]);
+    const matched = r.external.find((l) => l.matchedProjectId === "sample-proj-lakeview");
+    expect(matched).toBeDefined(); // kept, because nothing researched was returned
+    expect(r.matchedProjects[matched!.id]).toEqual({ id: "sample-proj-lakeview", slug: "sample-lakeview-residences", name: "SAMPLE Lakeview Residences" });
+    for (const id of Object.keys(r.matchedProjects)) expect(r.external.some((l) => l.id === id)).toBe(true);
+  });
+
+  it("L7: matches by RERA lookup beyond any project-count cap, via the real discovery pipeline", async () => {
+    const repos = createFixtureRepositories();
+    const lookup = vi.spyOn(repos.projects, "findPublishedProjectsByRera");
+    const list = vi.spyOn(repos.projects, "listProjects");
+    const { discoverExternalWithReport } = await import("@/discovery");
+    // locality with no researched results for this RERA → match must come from the lookup
+    const r = await searchProperties({ localityId: "hebbal", lane: "external" }, { repos, discover: discoverExternalWithReport });
+    expect(lookup).toHaveBeenCalled();
+    expect(lookup.mock.calls.flat(2)).toContain("SAMPLE-RERA-0001");
+    expect(list).not.toHaveBeenCalled(); // no "first 50 projects" scan
+    expect(Object.values(r.matchedProjects).map((m) => m.id)).toContain("sample-proj-lakeview");
+  });
+
+  it("findPublishedProjectsByRera normalises numbers and ignores unpublished projects", async () => {
+    const repos = createFixtureRepositories();
+    expect((await repos.projects.findPublishedProjectsByRera(["sample rera 0001"])).map((p) => p.id)).toEqual(["sample-proj-lakeview"]);
+    expect(await repos.projects.findPublishedProjectsByRera(["SAMPLE-RERA-0099"])).toEqual([]); // unpublished
+    expect(await repos.projects.findPublishedProjectsByRera([])).toEqual([]);
+  });
+
+  it("never matches listings to unpublished projects", async () => {
+    const repos = createFixtureRepositories();
+    const seen: string[][] = [];
+    const discover = vi.fn(async (_q: unknown, opts: { projects?: { id: string; published: boolean }[] }) => {
+      seen.push((opts.projects ?? []).map((p) => p.id));
+      return { listings: [listing("x", UNPUBLISHED.id)], errors: [] };
+    });
+    const r = await searchProperties({ lane: "external" }, { repos, discover });
+    expect(seen[0]).not.toContain(UNPUBLISHED.id);
+    expect(r.matchedProjects).toEqual({});
+  });
+
   it("returns nothing for an unknown locality id", async () => {
     const r = await searchProperties({ localityId: "not-a-locality" }, { repos: createFixtureRepositories() });
     expect(r.researched).toEqual([]);
@@ -277,6 +320,16 @@ describe("submitLead", () => {
     expect(await submitLead(lead("A@example.com"), { ipKey: "7.7.7.7" }, { repos, limiter: l })).toMatchObject({ reason: "rate_limited" });
   });
 
+  it("limits per each present contact value (phone counted separately from email)", async () => {
+    const repos = createFixtureRepositories();
+    const l = new FixedWindowRateLimiter(1, 60_000);
+    const withPhone = (email: string, ip: string) =>
+      submitLead({ ...validLead, email, phone: "9876543210" }, { ipKey: ip }, { repos, limiter: l });
+    expect((await withPhone("one@example.com", "1.0.0.1")).ok).toBe(true);
+    // new email + new IP, same phone → limited by the phone key
+    expect(await withPhone("two@example.com", "1.0.0.2")).toMatchObject({ reason: "rate_limited" });
+  });
+
   it("never logs personal data", async () => {
     vi.stubEnv("TN_LOG_IN_TESTS", "1");
     const spy = vi.spyOn(console, "info").mockImplementation(() => {});
@@ -318,9 +371,36 @@ describe("staff-only lead access", () => {
     const repos = createFixtureRepositories();
     const r = await submitLead(validLead, { ipKey: "a" }, { repos, limiter: new FixedWindowRateLimiter(10, 1000) });
     if (!r.ok) throw new Error("expected ok");
+    expect(await assignLead(r.leadId, "fixture-dev-advisor", { repos, requireStaff: staff })).toMatchObject({ ok: true, changed: true });
     expect(await updateLeadStatus(r.leadId, "withdrawn", { repos, requireStaff: advisor })).toMatchObject({ ok: false, error: "forbidden" });
     expect((await repos.leads.getById(r.leadId))?.email).toBe("buyer@example.com");
     expect(await updateLeadStatus(r.leadId, "contacted", { repos, requireStaff: advisor })).toMatchObject({ ok: true });
+  });
+
+  it("advisors see and update only leads assigned to them; only admins assign", async () => {
+    const repos = createFixtureRepositories();
+    const l = new FixedWindowRateLimiter(10, 1000);
+    const a = await submitLead(validLead, { ipKey: "a" }, { repos, limiter: l });
+    const b = await submitLead({ ...validLead, email: "b@example.com" }, { ipKey: "a" }, { repos, limiter: l });
+    if (!a.ok || !b.ok) throw new Error("expected ok");
+    expect(await listLeads({}, { repos, requireStaff: advisor })).toEqual([]);
+    expect(await assignLead(a.leadId, "fixture-dev-advisor", { repos, requireStaff: advisor })).toMatchObject({ ok: false, error: "forbidden" });
+    expect(await assignLead(a.leadId, "not-staff", { repos, requireStaff: staff })).toMatchObject({ ok: false, error: "validation" });
+    expect(await assignLead(a.leadId, "fixture-dev-advisor", { repos, requireStaff: staff })).toMatchObject({ ok: true, changed: true });
+    expect(await assignLead(a.leadId, "fixture-dev-advisor", { repos, requireStaff: staff })).toMatchObject({ ok: true, changed: false });
+    // advisor-supplied assignedTo cannot widen the scope
+    const mine = await listLeads({ assignedTo: "someone-else" }, { repos, requireStaff: advisor });
+    expect(mine.map((x) => x.id)).toEqual([a.leadId]);
+    expect(await getLead(b.leadId, { repos, requireStaff: advisor })).toBeNull();
+    expect(await updateLeadStatus(b.leadId, "contacted", { repos, requireStaff: advisor })).toMatchObject({ ok: false, error: "not_found" });
+    expect(await updateLeadStatus(a.leadId, "contacted", { repos, requireStaff: advisor })).toMatchObject({ ok: true });
+    expect(await listLeads({}, { repos, requireStaff: staff })).toHaveLength(2);
+    expect(await listLeads({ assignedTo: "fixture-dev-advisor" }, { repos, requireStaff: staff })).toHaveLength(1);
+    expect(await assignLead(a.leadId, null, { repos, requireStaff: staff })).toMatchObject({ ok: true, changed: true, lead: { assignedTo: null } });
+    expect((await listAssignableStaff({ repos, requireStaff: staff })).map((s) => s.role).sort()).toEqual(["admin", "advisor"]);
+    await expect(listAssignableStaff({ repos, requireStaff: advisor })).rejects.toMatchObject({ code: "forbidden" });
+    const events = (repos.leads as unknown as { events: { type: string }[] }).events.filter((e) => e.type === "assigned");
+    expect(events).toHaveLength(2);
   });
 
   it("lists leads with subject summaries and filters by requestType", async () => {

@@ -2,6 +2,7 @@ import "server-only";
 import type { Project } from "@/domain/types";
 import { findLocalitiesByText } from "@/config/markets";
 import { bhkMatches } from "@/domain/search-options";
+import { normaliseRera } from "@/discovery/dedupe";
 import {
   clampLimit,
   DEFAULT_PROJECT_LIMIT,
@@ -46,6 +47,14 @@ export class FixtureProjectRepository implements ProjectRepository {
       )
       .filter((p) => !filter.bhk || p.units.some((u) => bhkMatches(u.label, filter.bhk!)))
       .slice(0, limit)
+      .map((p) => structuredClone(p));
+  }
+
+  async findPublishedProjectsByRera(numbers: string[]): Promise<Project[]> {
+    const wanted = new Set(numbers.map(normaliseRera).filter((x): x is string => !!x));
+    if (!wanted.size) return [];
+    return this.published
+      .filter((p) => p.reraNumbers.status === "known" && (p.reraNumbers.value ?? []).some((r) => wanted.has(normaliseRera(r) ?? "")))
       .map((p) => structuredClone(p));
   }
 

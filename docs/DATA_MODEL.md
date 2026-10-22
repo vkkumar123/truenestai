@@ -62,6 +62,9 @@ observation date) · `reviewed` (checked by our reviewer against documents) · `
 ## Access control (RLS on every table)
 Roles: `anon`, `authenticated` (Supabase JWT; `auth.uid()`), `service_role` (bypasses RLS, server/workers only).
 `is_staff()` / `staff_role()` are `security definer` functions reading `staff_profiles` for `auth.uid()`.
+Policy-only helpers `private.is_published_project(text)` and `private.is_staff_admin()` live in the
+`private` schema (0003, L9), which must stay **out of** PostgREST's exposed schemas, so they cannot be
+called via `/rest/v1/rpc`. `is_staff()` / `staff_role()` stay in `public` (they reveal only the caller's own role).
 
 | Table | anon / authenticated | staff (authenticated + staff_profiles) | writes |
 |---|---|---|---|
@@ -69,13 +72,15 @@ Roles: `anon`, `authenticated` (Supabase JWT; `auth.uid()`), `service_role` (byp
 | sources | SELECT where `status='approved'` | — | service role |
 | projects | SELECT where `published` | — | service role |
 | developers, project_units, facts (current), fact_sources, regulatory_records, regulatory_searches | SELECT only for published projects | — | service role |
-| project_documents | SELECT (all columns except `storage_path`) for published projects | — | service role |
+| project_documents | SELECT (title, kind, version, dates, source; not `storage_path`/`sha256`/`size_bytes`/`content_type`/`uploaded_by`) for published projects | — | service role (`research_add_document`) |
 | infrastructure_items | SELECT where `published` | — | service role |
 | source_observations | none | none | service role |
 | staff_profiles | own row only (authenticated) | own row | service role |
 | project_search_index (view, `security_invoker`) | SELECT (inherits projects/facts/units RLS) | — | — |
-| leads | **none** (no INSERT, no SELECT): the server validates, rate-limits and stores leads with the service role | SELECT, UPDATE (status + erasure columns) | service role |
-| lead_events | none (a trigger writes `created`) | SELECT; INSERT with `actor_id = auth.uid()` | service role |
+| leads | **none** (no grants) | **none** (0004/L1: grants revoked; staff access is server-side with the service role after `requireStaff()` + service scoping). Policies kept as defence in depth: admins all, advisors `assigned_to = auth.uid()` | service role (`lead_assign` for assignment) |
+| lead_events | none (a trigger writes `created`) | **none** (0004/L1). Policies kept: visible leads only; INSERT `status_changed`, `actor_id = auth.uid()` | service role |
+| private.settings | none | none | service role / migration runner (deployment marker) |
+| storage bucket `project-documents` | none (private bucket, no `storage.objects` policies) | none directly — staff download via the server's signed URL | service role |
 
 DB-level rules independent of RLS (apply to every role, including the service role): leads require consent
 unless withdrawn; status changes must follow `LEAD_STATUS_TRANSITIONS` (trigger); once a lead is withdrawn its
@@ -91,12 +96,62 @@ Search filters that live in facts/units (construction status, BHK) are evaluated
 The app's Supabase repositories use the anon client for public reads and the service-role client for lead
 storage/staff operations and worker writes; staff operations are gated in `src/server/services/leads.ts` by
 `requireStaff()` before the repository is called. Withdrawal (irreversible PII erasure) additionally requires
-the `admin` role. **Not yet implemented:** per-advisor lead assignment/scoping — every staff member can see all
-leads (planned with milestone M2).
+the `admin` role.
 
-Tests: `npm run test:db` drops and recreates the `public`/`auth` schemas in `DATABASE_URL_TEST`, applies
-`tests/db/supabase-shim.sql` (test-only stand-in for Supabase roles and `auth.uid()`), then every migration,
-and asserts the policies above.
+**Lead assignment (M2):** `leads.assigned_to` → `staff_profiles.user_id`. Admins see and update every lead and
+assign/unassign (`assignLead`, `assignLeadAction`; DB `lead_assign(lead, assignee, actor)` — row lock, assignee
+must be staff, withdrawn leads refused, `assigned` event in `lead_events` with `assigned_to`). Advisors see,
+open and update only leads assigned to them: the service layer scopes `listLeads` / `getLead` /
+`updateLeadStatus` (an advisor gets `not_found` for other leads), mirroring the RLS policy above for any
+direct authenticated access. `listAssignableStaff()` (admin only) lists staff (id, role, display name; no
+contact data).
+
+Tests: `npm run test:db` drops and recreates the `public`/`auth`/`private`/`storage` schemas in
+`DATABASE_URL_TEST`, applies `tests/db/supabase-shim.sql` (test-only stand-in for Supabase roles, `auth.uid()`
+and `storage.buckets`), then every migration (directly, or through the migration runner), and asserts the
+policies above, the seed, and SQL/TS readiness parity.
+
+## Migrations, seed and staff bootstrap (M2)
+- `npm run db:migrate` (`scripts/db-migrate.ts` → `src/server/db/migrate.ts`) applies
+  `supabase/migrations/NNNN_*.sql` in order against `SUPABASE_DB_URL`. Ledger: `private.schema_migrations`
+  (name, sha256, applied_at); each migration and its ledger row commit in one transaction; an applied file whose
+  checksum changed aborts the run (add a new migration instead); a Postgres advisory lock serialises runners.
+  `--dry-run` lists pending files. The ledger is separate from the Supabase CLI's — use one tool per database.
+- Production marker (M1): `private.settings (key, value)`, `environment` ∈ production|staging|development, set
+  with `db:migrate -- --mark-production` (refused while SAMPLE projects exist). On a production-marked database the
+  SAMPLE seed is refused by the runner and by a guard at the top of the SAMPLE section of `seed.sql`.
+- Seed: `npm run db:seed:generate` writes `supabase/seed/seed.sql` (reference + SAMPLE projects) and
+  `supabase/seed/reference.sql` (geography from `src/config/markets` + the full source registry) from
+  `src/server/db/seed.ts`; a unit test fails when the committed files drift. Reference rows are upserted (repo
+  config wins; fixture-type sources are excluded from `reference.sql` and ship only with the SAMPLE seed, L5); SAMPLE rows (`is_sample = true`, names start with `SAMPLE`, `example.com` URLs, published exactly
+  as in the fixtures) use `on conflict do nothing`, so re-runs never overwrite later edits. Deterministic ids:
+  facts `<projectId>:<field>`, units `<projectId>:u<N>`, fact sources `<factId>:s<N>`.
+  `npm run db:seed` / `--seed` = migrate + `reference.sql` (safe everywhere); the SAMPLE seed needs
+  `--seed=full --allow-sample` (staging/dev).
+- Staff: `npm run staff:create -- --email … --role admin|advisor [--name …] [--dry-run]`
+  (`src/server/admin/staff-bootstrap.ts`): finds the Auth user by email or sends a Supabase invite (no
+  passwords on the command line), then upserts `staff_profiles`. Idempotent.
+
+## Documents (M2)
+- Object storage: private bucket `project-documents` (created by 0003 when `storage.buckets` exists; 15 MB
+  limit; `application/pdf`, `image/png`, `image/jpeg`). No `storage.objects` policies: anon/authenticated have no
+  access; the server uses the service role after a staff check.
+- Paths are immutable and versioned: `<projectId>/<documentKey>/v<N>/<safe-filename>` (DB check constraint).
+  Re-uploading the same `documentKey` creates version N+1; the storage write never overwrites (`upsert: false`).
+- Upload: `POST /api/staff/documents` (multipart; `src/server/http/document-upload.ts`) — Origin must match the
+  host (CSRF), staff session checked first, `Content-Length` required and ≤ 15 MB + 64 KB before the body is
+  parsed; JSON `{ok, documentId, projectId, version}` / `{ok:false, error, message, errors?}`. It calls
+  `uploadProjectDocument` (`src/server/services/documents.ts`, any staff role), which
+  validates metadata (registry `sourceId`, optional https `sourceUrl`, kind, ISO date), checks the bytes'
+  magic number (PDF/PNG/JPEG) against the declared type, ≤ 15 MB; stores the object; then
+  `research_add_document` locks the project, re-checks the version (`conflict` if another upload won), inserts
+  the row (`content_type`, `size_bytes`, `sha256`, `uploaded_by`) and audits field `documents`, action
+  `document_uploaded`, note `document uploaded: <key> v<N> (<kind>)`. A failed DB write removes the stored
+  object again — only after confirming no row references its path (L4); if that check fails the object is kept.
+- No Server Action is used, so the global Server Action body limit stays at Next's 1 MB default.
+- Download: `GET /api/staff/documents/<documentId>` — staff only; Supabase → 302 to a 60-second signed URL;
+  fixture (dev, in-memory) → the bytes as an attachment with `no-store`, `nosniff` and a sandbox CSP.
+- Document metadata (not the file) of a published project is public, like other provenance.
 
 ## Leads, consent and retention
 - Stored only with `contact_consent = true`; `marketing_consent` is separate and optional;
@@ -106,13 +161,71 @@ and asserts the policies above.
 - Logs carry only `redactLeadForLog` fields (id, status, requestType). Audit events carry no PII.
 - Fixture mode keeps leads in server memory per process (dev only).
 - Rate limiting (dev-grade, in-memory per process; production needs a shared store) counts only *valid*
-  submissions, keyed both on the client IP and on the hashed email/phone. The IP is the first
-  `X-Forwarded-For` hop, which is trustworthy only behind a proxy that overwrites that header (e.g. Vercel);
-  otherwise it is client-controlled and only the per-contact key is meaningful.
+  submissions, keyed on the client IP and separately on each contact value given (hashed email, hashed phone).
+  The client IP is taken `TRUSTED_PROXY_HOPS` entries from the **right** of `X-Forwarded-For`
+  (`src/server/client-ip.ts`); client-supplied left entries are never trusted. Requests without the header share
+  one `unknown` bucket.
 - A scheduled purge of leads past `retention_until` is not implemented yet.
 
 ## Auth
 - Supabase mode: `@supabase/ssr` cookie session, verified with `auth.getUser()`, role from `staff_profiles`.
-  Session refresh needs a Next proxy/middleware (not part of this slice).
+  `src/proxy.ts` refreshes the session on `/admin/*` (per `@supabase/ssr`: `getUser()` rotates an expired token;
+  new cookies go to the forwarded request and the response; a definitively signed-out user is redirected to
+  login). The proxy is a fast path only — pages and actions still verify.
+- Sign-in throttle (L2, dev-grade, in-memory **per instance**: not shared across processes/serverless
+  instances; production also relies on Supabase Auth rate limits and edge/WAF limits): only **failed** sign-ins
+  (wrong credentials, non-staff account) count — `LOGIN_MAX_ATTEMPTS` (default 10) per client IP per
+  `LOGIN_WINDOW_SECONDS` (default 900), and 5× that per email in Supabase mode; checked before the credential
+  check (`src/server/services/login-throttle.ts`).
 - Fixture mode (dev only): `ADMIN_DEV_PASSWORD` (≥ 12 chars, constant-time compare) issues an httpOnly,
   `sameSite=lax`, 8-hour HMAC-signed cookie (`SESSION_SECRET` ≥ 32 chars). Refused when `NODE_ENV=production`.
+
+## Staff research write-model (M3, D12/D13)
+- Editable research facts: `address`, `reraNumbers`, `constructionStatus`, `declaredPossession`
+  (DB `facts.field`: `address`, `rera_numbers`, `construction_status`, `declared_possession`).
+- **Who writes:** only signed-in human staff through `src/server/services/research.ts`. Workers and AI
+  pipelines never hold a staff session (they produce drafts elsewhere); the automated-actor id check
+  (`ai`, `system`, `bot`, `automation`) is kept as defence in depth.
+- Every edit needs ≥ 1 https source with an observed date (`src/research/fact-edit.ts`) whose `sourceId` is in
+  the source registry (`listResearchSources()`; fixture sources only outside production), and resets the
+  fact's verification to `unverified`.
+- **Atomicity (Supabase):** every staff write is one SQL transaction in a `security invoker`, fixed
+  `search_path`, service-role-only function that takes a row lock on the project and writes the audit row
+  (`at` defaulted by the DB):
+  `research_create_project`, `research_set_fact`, `research_set_verification`, `research_set_published`
+  (signatures as of `0003_m2_live.sql`). `research_set_fact` recomputes `projects.completeness` in SQL from the
+  committed state (`tn_compute_completeness`, same formula as `computeCompleteness`; R2).
+  Fixture mode computes the next state + audit events, then commits both in one synchronous step.
+- **Stale reviews (H1):** a verification change carries `expectedVersion` = `factVersion(fact)` as the reviewer
+  saw it, and optionally `expectedFrom` = the verification state they saw. The service and repository compare
+  both with the current fact; `research_set_verification(…, p_expected_from, …)` re-checks, under the row lock,
+  that the exact fact row is still current **and** its verification still equals the expected one (R1). Otherwise → `conflict` ("This fact changed since you loaded
+  it — reload and review again").
+- Verification rules (`canSetVerification`): advisors may set `disputed` / `requires_professional_review`; only
+  admins may set `source_confirmed` / `reviewed` or reset to `unverified` (incl. clearing `disputed`). A fact
+  needs ≥ 1 source before its verification can change.
+- **Publish:** admin only (`PUBLISH_ROLE`). `research_set_published` re-checks readiness in SQL under the row
+  lock (`tn_publish_blockers`: RERA known and `source_confirmed`/`reviewed`, construction status known, no
+  disputed current fact, every known current fact has a source, completeness ≥ 0.6 computed live by
+  `tn_compute_completeness`). These constants mirror `src/research/publish.ts`; a unit test parses the latest
+  definition, and a DB test (R4) compares `tn_publish_blockers` / `tn_compute_completeness` with
+  `evaluatePublishReadiness` / `computeCompleteness` on every seeded SAMPLE project, before and after mutations. Rules are an assumption
+  pending owner approval.
+- **D13 auto-unpublish:** after a fact edit or verification change, a published project that no longer passes
+  readiness is unpublished in the same transaction, audited as `unpublished` with note
+  `auto: failed readiness after edit` and the editing staff member as actor. Public pages are revalidated.
+  Research actions return `autoUnpublished: boolean` and, when true, `autoUnpublishedMessage` separately from
+  the base `message` (R3).
+- New projects start unpublished, `is_sample = false`, every fact unknown; slug = kebab(name + locality), made
+  unique with a numeric suffix. A **new developer** is created unless an existing `developerId` is chosen
+  (developers are never merged by name).
+- Audit: `fact_review_events` (↔ `FactAuditEvent`) — RLS on; staff SELECT via `is_staff()`; no client
+  insert/update/delete; **append-only for every role** (trigger rejects UPDATE/DELETE/TRUNCATE, including the
+  service role and the owner). Staff views show the actor id and `staff_profiles.display_name` when present.
+- Fixture mode: staff writes mutate the in-memory project list the public repository reads (per process,
+  lost on restart); `lastCheckedAt` changes only on fact edits. The dev advisor login
+  (`ADMIN_DEV_ADVISOR_PASSWORD`) exists to exercise role limits.
+- Search matches Lane B listings against published projects looked up **by RERA number**
+  (`findPublishedProjectsByRera`, via `project_search_index.rera_numbers_normalized`; no project-count cap) —
+  also under `lane=external` — and returns `matchedProjects: { [listingId]: { id, slug, name } }` for
+  "Researched version available".

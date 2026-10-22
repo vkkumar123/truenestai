@@ -2,6 +2,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Project } from "@/domain/types";
 import { findLocalitiesByText } from "@/config/markets";
+import { normaliseRera } from "@/discovery/dedupe";
 import { clampLimit, DEFAULT_PROJECT_LIMIT, MAX_PROJECT_LIMIT, type ProjectFilter, type ProjectRepository } from "../types";
 import { mapProjectRow, PROJECT_SELECT, type ProjectRow } from "./mappers";
 
@@ -29,7 +30,7 @@ export class SupabaseProjectRepository implements ProjectRepository {
     const text = filter.text?.trim();
     if (text) {
       const term = ilikeTerm(text);
-      const ors = [`name.ilike.${term}`, `slug.ilike.${term}`];
+      const ors = [`name.ilike.${term}`, `slug.ilike.${term}`, `developer_name.ilike.${term}`];
       const locIds = findLocalitiesByText(text).map((l) => l.id);
       if (locIds.length) ors.push(`locality_id.in.(${locIds.join(",")})`);
       q = q.or(ors.join(","));
@@ -51,6 +52,19 @@ export class SupabaseProjectRepository implements ProjectRepository {
     if (error) throw new Error(`getProjectsByIds failed: ${error.message}`);
     const byId = new Map((data as unknown as ProjectRow[]).map((r) => [r.id, mapProjectRow(r)]));
     return ids.flatMap((id) => (byId.has(id) ? [byId.get(id)!] : []));
+  }
+
+  async findPublishedProjectsByRera(numbers: string[]): Promise<Project[]> {
+    const wanted = [...new Set(numbers.map(normaliseRera).filter((x): x is string => !!x))].slice(0, 100);
+    if (!wanted.length) return [];
+    const { data, error } = await this.db
+      .from("project_search_index")
+      .select("id")
+      .eq("published", true)
+      .overlaps("rera_numbers_normalized", wanted)
+      .limit(MAX_PROJECT_LIMIT);
+    if (error) throw new Error(`findPublishedProjectsByRera failed: ${error.message}`);
+    return this.getProjectsByIds((data as { id: string }[]).map((r) => r.id));
   }
 
   async hasSampleData(): Promise<boolean> {

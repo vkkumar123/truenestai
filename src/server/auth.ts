@@ -1,7 +1,9 @@
 import "server-only";
 import { cookies } from "next/headers";
+import { unstable_rethrow } from "next/navigation";
+import { isAuthError } from "@supabase/supabase-js";
 import { createServerClient } from "@supabase/ssr";
-import { adminDevPassword, ConfigError, dataBackend, isProduction, sessionSecret, supabaseEnv } from "./env";
+import { adminDevAdvisorPassword, adminDevPassword, ConfigError, dataBackend, isProduction, sessionSecret, supabaseEnv } from "./env";
 import { log } from "./log";
 import { constantTimeEqual, SESSION_TTL_SECONDS, signSessionToken, verifySessionToken } from "./session-token";
 
@@ -36,6 +38,7 @@ export function isStaffAuthError(e: unknown): e is StaffAuthError {
 
 export const FIXTURE_SESSION_COOKIE = "tn_staff_session";
 export const FIXTURE_ADMIN_USER_ID = "fixture-dev-admin";
+export const FIXTURE_ADVISOR_USER_ID = "fixture-dev-advisor";
 
 /** The dev-only password login is refused outright in production builds/servers. */
 export function fixtureAdminAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -87,16 +90,25 @@ async function getFixtureStaffSession(now: Date): Promise<StaffSession | null> {
 }
 
 /**
- * Current staff session, or null. Never throws: a missing/invalid session, a configuration error
- * (logged as auth.misconfigured) or an auth-service failure all yield null (deny).
+ * Current staff session, or null for: no/invalid/expired session, a configuration error (logged
+ * as auth.misconfigured) or a Supabase auth failure (deny). Next.js framework signals
+ * (redirect, notFound, dynamic bailouts, prerender interrupts) and any other unexpected error are
+ * RE-THROWN, never turned into "signed out" — swallowing them hid real failures behind a login redirect.
  */
 export async function getStaffSession(now: Date = new Date()): Promise<StaffSession | null> {
   try {
     return dataBackend() === "supabase" ? await getSupabaseStaffSession() : await getFixtureStaffSession(now);
   } catch (e) {
-    if (e instanceof ConfigError) log.error("auth.misconfigured", { reason: e.message });
-    else log.error("auth.session_check_failed", { reason: e instanceof Error ? e.name : "unknown" });
-    return null;
+    unstable_rethrow(e);
+    if (e instanceof ConfigError) {
+      log.error("auth.misconfigured", { reason: e.message });
+      return null;
+    }
+    if (isAuthError(e)) {
+      log.warn("auth.session_check_failed", { reason: e.name });
+      return null;
+    }
+    throw e;
   }
 }
 
@@ -114,8 +126,9 @@ export type StaffLoginResult =
 const INVALID = { ok: false, error: "invalid_credentials", message: "Incorrect sign-in details." } as const;
 
 /**
- * DEV-ONLY admin login for fixture mode. Refused when NODE_ENV === "production".
- * Requires ADMIN_DEV_PASSWORD (>= 12 chars) and SESSION_SECRET (>= 32 chars).
+ * DEV-ONLY staff login for fixture mode. Refused when NODE_ENV === "production".
+ * ADMIN_DEV_PASSWORD (>= 12 chars) signs in as admin; the optional ADMIN_DEV_ADVISOR_PASSWORD
+ * (>= 12 chars, different) signs in as advisor. Requires SESSION_SECRET (>= 32 chars).
  */
 export async function loginWithDevPassword(password: string, now: Date = new Date()): Promise<StaffLoginResult> {
   if (isProduction()) {
@@ -126,19 +139,28 @@ export async function loginWithDevPassword(password: string, now: Date = new Dat
     return { ok: false, error: "disabled", message: "Development sign-in is only available in fixture mode." };
   }
   let expected: string;
+  let advisorExpected: string | null;
   let secret: string;
   try {
     expected = adminDevPassword();
     secret = sessionSecret();
+    advisorExpected = adminDevAdvisorPassword();
   } catch (e) {
     log.error("auth.fixture_login_misconfigured", { reason: e instanceof ConfigError ? e.message : "config" });
     return { ok: false, error: "misconfigured", message: "Sign-in is not configured on this server." };
   }
-  if (typeof password !== "string" || password.length > 512 || !constantTimeEqual(password, expected)) {
+  if (typeof password !== "string" || password.length > 512) return INVALID;
+  // Evaluate both comparisons so timing does not reveal which password matched.
+  const isAdmin = constantTimeEqual(password, expected);
+  const isAdvisor = advisorExpected !== null && constantTimeEqual(password, advisorExpected);
+  if (!isAdmin && !isAdvisor) {
     log.warn("auth.fixture_login_failed");
     return INVALID;
   }
-  const { token, payload } = signSessionToken({ sub: FIXTURE_ADMIN_USER_ID, role: "admin" }, secret, now);
+  const claims = isAdmin
+    ? { sub: FIXTURE_ADMIN_USER_ID, role: "admin" as const }
+    : { sub: FIXTURE_ADVISOR_USER_ID, role: "advisor" as const };
+  const { token, payload } = signSessionToken(claims, secret, now);
   (await cookies()).set(FIXTURE_SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
@@ -146,7 +168,7 @@ export async function loginWithDevPassword(password: string, now: Date = new Dat
     path: "/",
     maxAge: SESSION_TTL_SECONDS,
   });
-  log.info("auth.fixture_login_ok");
+  log.info("auth.fixture_login_ok", { role: payload.role });
   return {
     ok: true,
     session: { userId: payload.sub, role: payload.role, mode: "fixture", expiresAt: new Date(payload.exp * 1000).toISOString() },

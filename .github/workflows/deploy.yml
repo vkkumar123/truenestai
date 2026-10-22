@@ -4,7 +4,8 @@ name: Deploy (GCP Cloud Run)
 # `staging` (git push origin HEAD:staging) to put it on the staging site before it is merged.
 # Manual "production" run -> promote the image already built for that commit, smoke test, and
 # roll traffic back to the previous revision if the smoke test fails.
-# Does nothing until the GCP_* repository variables exist (docs/DEPLOYMENT.md).
+# GCP coordinates below are not secrets (printed by infra/gcp-bootstrap.sh). Repository variables of
+# the same name override them, e.g. for a fork or a second project.
 
 on:
   push:
@@ -27,7 +28,11 @@ concurrency:
 env:
   NODE_VERSION: "22"
   NEXT_TELEMETRY_DISABLED: "1"
-  IMAGE: ${{ vars.GCP_ARTIFACT_REPOSITORY }}/web
+  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID || 'truenestai' }}
+  GCP_REGION: ${{ vars.GCP_REGION || 'asia-south1' }}
+  GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER || 'projects/590863383772/locations/global/workloadIdentityPools/github/providers/truenestai' }}
+  GCP_DEPLOYER_SA: ${{ vars.GCP_DEPLOYER_SA || 'truenest-deployer@truenestai.iam.gserviceaccount.com' }}
+  IMAGE: ${{ vars.GCP_ARTIFACT_REPOSITORY || 'asia-south1-docker.pkg.dev/truenestai/truenest' }}/web
 
 jobs:
   configured:
@@ -38,11 +43,11 @@ jobs:
     steps:
       - id: check
         run: |
-          if [ -n "${{ vars.GCP_PROJECT_ID }}" ] && [ -n "${{ vars.GCP_WIF_PROVIDER }}" ]; then
+          if [ -n "${{ env.GCP_PROJECT_ID }}" ] && [ -n "${{ env.GCP_WIF_PROVIDER }}" ]; then
             echo "ok=true" >> "$GITHUB_OUTPUT"
           else
             echo "ok=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::GCP repository variables are not set yet; skipping deploy (docs/DEPLOYMENT.md)."
+            echo "::notice::GCP coordinates are not set; skipping deploy (docs/DEPLOYMENT.md)."
           fi
 
   verify:
@@ -78,18 +83,18 @@ jobs:
 
       - uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
-          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_DEPLOYER_SA }}
 
       - uses: google-github-actions/setup-gcloud@v2
 
       - name: Build and push image
         id: build
         run: |
-          gcloud auth configure-docker "${{ vars.GCP_REGION }}-docker.pkg.dev" --quiet
+          gcloud auth configure-docker "${{ env.GCP_REGION }}-docker.pkg.dev" --quiet
           key_file="$RUNNER_TEMP/next_actions_key"
           gcloud secrets versions access latest --secret=truenest-next-server-actions-key \
-            --project="${{ vars.GCP_PROJECT_ID }}" > "$key_file"
+            --project="${{ env.GCP_PROJECT_ID }}" > "$key_file"
           docker buildx build \
             --secret id=next_actions_key,src="$key_file" \
             --build-arg DEPLOYMENT_VERSION="${GITHUB_SHA}" \
@@ -107,11 +112,11 @@ jobs:
         run: |
           gcloud run deploy truenest-staging \
             --image="${{ steps.build.outputs.ref }}" \
-            --region="${{ vars.GCP_REGION }}" \
-            --project="${{ vars.GCP_PROJECT_ID }}" \
+            --region="${{ env.GCP_REGION }}" \
+            --project="${{ env.GCP_PROJECT_ID }}" \
             --quiet
-          url=$(gcloud run services describe truenest-staging --region="${{ vars.GCP_REGION }}" \
-            --project="${{ vars.GCP_PROJECT_ID }}" --format='value(status.url)')
+          url=$(gcloud run services describe truenest-staging --region="${{ env.GCP_REGION }}" \
+            --project="${{ env.GCP_PROJECT_ID }}" --format='value(status.url)')
           echo "url=$url" >> "$GITHUB_OUTPUT"
 
       - name: Smoke test
@@ -138,8 +143,8 @@ jobs:
     steps:
       - uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
-          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_DEPLOYER_SA }}
 
       - uses: google-github-actions/setup-gcloud@v2
 
@@ -154,13 +159,13 @@ jobs:
       - name: Deploy
         id: deploy
         run: |
-          prev=$(gcloud run services describe truenest-production --region="${{ vars.GCP_REGION }}" \
-            --project="${{ vars.GCP_PROJECT_ID }}" --format='value(status.latestReadyRevisionName)')
+          prev=$(gcloud run services describe truenest-production --region="${{ env.GCP_REGION }}" \
+            --project="${{ env.GCP_PROJECT_ID }}" --format='value(status.latestReadyRevisionName)')
           echo "previous=$prev" >> "$GITHUB_OUTPUT"
           gcloud run deploy truenest-production \
             --image="${{ steps.image.outputs.ref }}" \
-            --region="${{ vars.GCP_REGION }}" \
-            --project="${{ vars.GCP_PROJECT_ID }}" \
+            --region="${{ env.GCP_REGION }}" \
+            --project="${{ env.GCP_PROJECT_ID }}" \
             --quiet
 
       - name: Smoke test (through the load balancer)
@@ -179,6 +184,6 @@ jobs:
         run: |
           gcloud run services update-traffic truenest-production \
             --to-revisions="${{ steps.deploy.outputs.previous }}=100" \
-            --region="${{ vars.GCP_REGION }}" \
-            --project="${{ vars.GCP_PROJECT_ID }}"
+            --region="${{ env.GCP_REGION }}" \
+            --project="${{ env.GCP_PROJECT_ID }}"
           echo "::warning::Traffic rolled back to ${{ steps.deploy.outputs.previous }}"

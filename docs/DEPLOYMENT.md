@@ -23,7 +23,7 @@ No service-account keys exist. Nothing secret is stored in GitHub or Terraform s
    cd truenestai && bash infra/gcp-bootstrap.sh
    ```
    It checks billing, creates the Terraform state bucket, applies `infra/terraform` (type `yes` at the prompt), generates the build key, and prints five values.
-3. Add those five as **repository variables** at https://github.com/vkkumar123/truenestai/settings/variables/actions: `GCP_PROJECT_ID`, `GCP_REGION`, `GCP_WIF_PROVIDER`, `GCP_DEPLOYER_SA`, `GCP_ARTIFACT_REPOSITORY`.
+3. For project `truenestai` these five values are already the defaults in `deploy.yml` (they are not secrets). For another project, set them as repository variables of the same name (`GCP_PROJECT_ID`, `GCP_REGION`, `GCP_WIF_PROVIDER`, `GCP_DEPLOYER_SA`, `GCP_ARTIFACT_REPOSITORY`), which override the defaults.
 4. Deploy: push to `main`, or push any commit to the `staging` branch (`git push origin HEAD:staging`), or run the workflow manually from the Actions tab.
 
 ## Switching staging to Supabase (after M2)

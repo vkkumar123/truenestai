@@ -46,29 +46,40 @@ read -rs DB_PASSWORD
 echo
 [ -n "$DB_PASSWORD" ] || { echo "No password entered."; exit 1; }
 
-# Build connection strings without echoing the password. Direct host is IPv6-only, so the
-# Supabase session pooler (IPv4, port 5432) is tried as well.
+# Build connection strings without echoing the password. The direct host is IPv6-only, so the
+# Supabase session pooler (IPv4, port 5432) is tried too. The pooler host depends on the project's
+# region and cluster, so every known combination is tried (wrong ones answer "tenant not found").
 export DB_PASSWORD PROJECT_REF REGION
 CANDIDATES=$(node -e '
-  const p = encodeURIComponent(process.env.DB_PASSWORD), ref = process.env.PROJECT_REF, r = process.env.REGION;
+  const p = encodeURIComponent(process.env.DB_PASSWORD), ref = process.env.PROJECT_REF, first = process.env.REGION;
   const q = "?sslmode=no-verify";
-  console.log([
-    `postgresql://postgres:${p}@db.${ref}.supabase.co:5432/postgres${q}`,
-    `postgresql://postgres.${ref}:${p}@aws-0-${r}.pooler.supabase.com:5432/postgres${q}`,
-    `postgresql://postgres.${ref}:${p}@aws-1-${r}.pooler.supabase.com:5432/postgres${q}`,
-  ].join("\n"));')
+  const regions = [first, "ap-southeast-1", "ap-southeast-2", "ap-northeast-1", "ap-northeast-2", "ap-south-2",
+    "us-east-1", "us-east-2", "us-west-1", "us-west-2", "ca-central-1", "sa-east-1",
+    "eu-west-1", "eu-west-2", "eu-west-3", "eu-central-1", "eu-central-2", "eu-north-1"];
+  const out = [`postgresql://postgres:${p}@db.${ref}.supabase.co:5432/postgres${q}`];
+  for (const r of [...new Set(regions)])
+    for (const c of ["aws-0", "aws-1", "aws-2"])
+      out.push(`postgresql://postgres.${ref}:${p}@${c}-${r}.pooler.supabase.com:5432/postgres${q}`);
+  console.log(out.join("\n"));')
 unset DB_PASSWORD
 
-say "Finding a working database connection"
+say "Finding a working database connection (this can take a minute)"
 SUPABASE_DB_URL=""
+LOG=$(mktemp)
 while IFS= read -r url; do
-  if SUPABASE_DB_URL="$url" npx --no-install tsx --conditions=react-server scripts/db-migrate.ts --dry-run >/tmp/tn-dry.log 2>&1; then
-    SUPABASE_DB_URL="$url"; break
+  if SUPABASE_DB_URL="$url" npx --no-install tsx --conditions=react-server scripts/db-migrate.ts --dry-run >"$LOG" 2>&1; then
+    SUPABASE_DB_URL="$url"; grep '^database' "$LOG" || true; break
   fi
-  grep -E '^(database|migration failed)' /tmp/tn-dry.log || true
+  if grep -qiE 'password authentication failed|28P01' "$LOG"; then
+    rm -f "$LOG"
+    echo "The database password was rejected. Copy it again (or reset it in Supabase > Project Settings > Database) and re-run."
+    exit 1
+  fi
+  printf '.'
 done <<< "$CANDIDATES"
-rm -f /tmp/tn-dry.log
-[ -n "$SUPABASE_DB_URL" ] || { echo "Could not connect. Check the password (Supabase > Project Settings > Database) and run again."; exit 1; }
+echo
+rm -f "$LOG"
+[ -n "$SUPABASE_DB_URL" ] || { echo "Could not reach the database. Send Claude the output above."; exit 1; }
 export SUPABASE_DB_URL
 
 run() { npx --no-install tsx --conditions=react-server scripts/db-migrate.ts "$@"; }

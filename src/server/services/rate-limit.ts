@@ -29,6 +29,12 @@ export class FixedWindowRateLimiter {
     return { allowed: entry.count <= this.max, retryAfterMs: Math.max(0, entry.resetAt - now) };
   }
 
+  /** Whether `rawKey` is currently over the limit, WITHOUT recording a hit. */
+  isBlocked(rawKey: string, now: number = Date.now()): boolean {
+    const entry = this.hits.get(createHash("sha256").update(rawKey).digest("hex"));
+    return !!entry && entry.resetAt > now && entry.count >= this.max;
+  }
+
   reset(): void {
     this.hits.clear();
   }

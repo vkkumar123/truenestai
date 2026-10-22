@@ -7,6 +7,7 @@ import { SupabaseExternalListingRepository } from "./external-listings";
 import { SupabaseLeadRepository } from "./leads";
 import { SupabaseProjectRepository } from "./projects";
 import { SupabaseResearchRepository } from "./research";
+import { SupabaseDocumentStorage } from "../../storage/documents";
 
 export { SupabaseProjectRepository, SupabaseExternalListingRepository, SupabaseLeadRepository, SupabaseResearchRepository };
 
@@ -22,5 +23,6 @@ export function createSupabaseRepositories(): Repositories {
     research: new SupabaseResearchRepository(serviceClient),
     externalListings: new SupabaseExternalListingRepository(anon, serviceClient),
     leads: new SupabaseLeadRepository(serviceClient),
+    documentStorage: new SupabaseDocumentStorage(serviceClient),
   };
 }

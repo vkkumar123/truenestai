@@ -22,3 +22,13 @@ language sql stable as $$
   select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid
 $$;
 grant execute on function auth.uid() to anon, authenticated, service_role;
+
+-- Minimal stand-in for Supabase Storage's bucket table (only the columns migrations write).
+create schema if not exists storage;
+create table if not exists storage.buckets (
+  id text primary key,
+  name text not null,
+  public boolean default false,
+  file_size_limit bigint,
+  allowed_mime_types text[]
+);

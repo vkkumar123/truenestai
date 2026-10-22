@@ -63,19 +63,31 @@ Run from the repository root on a trusted machine with the variables above in `.
 ```bash
 npm run db:migrate -- --dry-run          # lists pending migrations, changes nothing
 npm run db:migrate                       # applies supabase/migrations/*.sql (ledger: private.schema_migrations)
-npm run db:seed                          # STAGING: migrations + geography + source registry + SAMPLE projects
-npm run db:migrate -- --seed=reference   # PRODUCTION: geography + source registry only (no SAMPLE projects)
+
+# PRODUCTION — once, right after the first migrate, then reference data:
+npm run db:migrate -- --mark-production  # writes private.settings environment = production
+npm run db:seed                          # geography + source registry only (same as --seed=reference)
+
+# STAGING / DEV only — fictional SAMPLE projects (some published):
+npm run db:migrate -- --seed=full --allow-sample
+
 npm run staff:create -- --email owner@<your-domain> --role admin --name "Owner" --dry-run
 npm run staff:create -- --email owner@<your-domain> --role admin --name "Owner"
 ```
+- **Production marker:** `--mark-production` records `environment = production` in `private.settings`
+  (migration 0004; not reachable through the Data API). On a marked database the SAMPLE seed is refused by the
+  runner **and** by `seed.sql` itself (if someone pastes it into the SQL editor). Marking is refused while the
+  database contains SAMPLE projects. Mark production before anything else touches the database.
+- `--seed` (and `npm run db:seed`) means **reference data only**. The SAMPLE seed needs both `--seed=full`
+  and `--allow-sample`, and cannot be combined with `--mark-production`.
 - Migrations and seeds are idempotent; re-running is safe. An already-applied migration that was edited is
   refused — add a new migration instead.
 - This runner keeps its own ledger. Do not also apply the same migrations with the Supabase CLI
   (`supabase db push`) on that database.
 - `staff:create` sends a Supabase invite email to new users (they set their own password); for existing users it
   only sets the role. Re-run with `--role advisor` / `--role admin` to change a role.
-- SAMPLE projects are fictional (`is_sample = true`, names start with "SAMPLE", `example.com` URLs); some are
-  published so staging shows realistic pages. Never seed them into production.
+- SAMPLE projects are fictional (`is_sample = true`, names start with "SAMPLE", `example.com` URLs) and come with
+  the fictional fixture sources; `reference.sql` contains no fixture sources.
 
 ## 7. Verify
 1. `DATA_BACKEND=supabase npm run dev`, open `/` — staging shows the published SAMPLE projects (production: none).
@@ -87,11 +99,11 @@ npm run staff:create -- --email owner@<your-domain> --role admin --name "Owner"
 5. Leave the admin page open for more than an hour and reload: you should stay signed in (session refresh in
    `src/proxy.ts`).
 
-## npm scripts (to be added to package.json by the orchestrator)
+## npm scripts (in package.json)
 ```json
 "db:migrate": "tsx --env-file-if-exists=.env.local --conditions=react-server scripts/db-migrate.ts",
 "db:seed": "tsx --env-file-if-exists=.env.local --conditions=react-server scripts/db-migrate.ts --seed",
 "db:seed:generate": "tsx --conditions=react-server scripts/generate-seed.ts",
 "staff:create": "tsx --env-file-if-exists=.env.local --conditions=react-server scripts/create-staff.ts"
 ```
-`--conditions=react-server` makes the `server-only` guard resolve to its no-op build outside Next.js.
+`db:seed` loads reference data only. `--conditions=react-server` makes the `server-only` guard resolve to its no-op build outside Next.js.

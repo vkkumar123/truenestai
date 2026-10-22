@@ -397,7 +397,8 @@ describe("staff-only lead access", () => {
     expect(await listLeads({}, { repos, requireStaff: staff })).toHaveLength(2);
     expect(await listLeads({ assignedTo: "fixture-dev-advisor" }, { repos, requireStaff: staff })).toHaveLength(1);
     expect(await assignLead(a.leadId, null, { repos, requireStaff: staff })).toMatchObject({ ok: true, changed: true, lead: { assignedTo: null } });
-    expect((await listAssignableStaff({ repos, requireStaff: advisor })).map((s) => s.role).sort()).toEqual(["admin", "advisor"]);
+    expect((await listAssignableStaff({ repos, requireStaff: staff })).map((s) => s.role).sort()).toEqual(["admin", "advisor"]);
+    await expect(listAssignableStaff({ repos, requireStaff: advisor })).rejects.toMatchObject({ code: "forbidden" });
     const events = (repos.leads as unknown as { events: { type: string }[] }).events.filter((e) => e.type === "assigned");
     expect(events).toHaveLength(2);
   });

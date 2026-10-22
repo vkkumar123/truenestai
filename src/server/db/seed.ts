@@ -78,7 +78,20 @@ function referenceSql(): string {
     aliases: textArray(l.aliases),
     boundary: l.boundary ? jsonb(l.boundary) : null,
   }));
-  const sources = SOURCE_REGISTRY.map((s) => ({
+  // L5: fixture-type sources (fictional) are NOT reference data; they ship only with the SAMPLE seed.
+  const sources = sourceRows(SOURCE_REGISTRY.filter((s) => s.type !== "fixture"));
+  return [
+    "-- Reference data: market geography + source registry (upserted; repo config wins).",
+    "-- Fixture (fictional) sources are excluded; they come only with the SAMPLE seed.",
+    upsert("market_phases", phases),
+    upsert("zones", zones),
+    upsert("localities", localities),
+    upsert("sources", sources),
+  ].join("\n");
+}
+
+function sourceRows(entries: typeof SOURCE_REGISTRY) {
+  return entries.map((s) => ({
     id: s.id,
     name: s.name,
     type: s.type,
@@ -92,13 +105,6 @@ function referenceSql(): string {
     listing_limitations: textArray(s.listingLimitations),
     notes: s.notes,
   }));
-  return [
-    "-- Reference data: market geography + source registry (upserted; repo config wins).",
-    upsert("market_phases", phases),
-    upsert("zones", zones),
-    upsert("localities", localities),
-    upsert("sources", sources),
-  ].join("\n");
 }
 
 interface SampleRows {
@@ -223,6 +229,16 @@ function sampleSql(projects: readonly Project[]): string {
   return [
     "-- FICTIONAL SAMPLE projects (is_sample = true; published as in the fixtures). Never real data.",
     "-- `on conflict do nothing`: re-running never overwrites rows edited since.",
+    "-- M1: refuse on a database marked production (private.settings, 0004).",
+    `do $$
+begin
+  if to_regclass('private.settings') is not null
+     and exists (select 1 from private.settings where key = 'environment' and value = 'production') then
+    raise exception 'SAMPLE seed refused: this database is marked production';
+  end if;
+end $$;
+`,
+    upsert("sources", sourceRows(SOURCE_REGISTRY.filter((s) => s.type === "fixture"))),
     insert("developers", r.developers, nothing),
     insert("projects", r.projects, nothing),
     insert("project_units", r.units, nothing),

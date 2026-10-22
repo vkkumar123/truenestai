@@ -77,8 +77,9 @@ called via `/rest/v1/rpc`. `is_staff()` / `staff_role()` stay in `public` (they 
 | source_observations | none | none | service role |
 | staff_profiles | own row only (authenticated) | own row | service role |
 | project_search_index (view, `security_invoker`) | SELECT (inherits projects/facts/units RLS) | — | — |
-| leads | **none** (no INSERT, no SELECT): the server validates, rate-limits and stores leads with the service role | admins: SELECT/UPDATE all; advisors: only rows with `assigned_to = auth.uid()` (status + erasure columns; `assigned_to` is not client-writable) | service role (`lead_assign` for assignment) |
-| lead_events | none (a trigger writes `created`) | SELECT for leads the caller can see; INSERT `status_changed` with `actor_id = auth.uid()` on such leads | service role |
+| leads | **none** (no grants) | **none** (0004/L1: grants revoked; staff access is server-side with the service role after `requireStaff()` + service scoping). Policies kept as defence in depth: admins all, advisors `assigned_to = auth.uid()` | service role (`lead_assign` for assignment) |
+| lead_events | none (a trigger writes `created`) | **none** (0004/L1). Policies kept: visible leads only; INSERT `status_changed`, `actor_id = auth.uid()` | service role |
+| private.settings | none | none | service role / migration runner (deployment marker) |
 | storage bucket `project-documents` | none (private bucket, no `storage.objects` policies) | none directly — staff download via the server's signed URL | service role |
 
 DB-level rules independent of RLS (apply to every role, including the service role): leads require consent
@@ -102,7 +103,8 @@ assign/unassign (`assignLead`, `assignLeadAction`; DB `lead_assign(lead, assigne
 must be staff, withdrawn leads refused, `assigned` event in `lead_events` with `assigned_to`). Advisors see,
 open and update only leads assigned to them: the service layer scopes `listLeads` / `getLead` /
 `updateLeadStatus` (an advisor gets `not_found` for other leads), mirroring the RLS policy above for any
-direct authenticated access. `listAssignableStaff()` lists staff (id, role, display name; no contact data).
+direct authenticated access. `listAssignableStaff()` (admin only) lists staff (id, role, display name; no
+contact data).
 
 Tests: `npm run test:db` drops and recreates the `public`/`auth`/`private`/`storage` schemas in
 `DATABASE_URL_TEST`, applies `tests/db/supabase-shim.sql` (test-only stand-in for Supabase roles, `auth.uid()`
@@ -115,13 +117,17 @@ policies above, the seed, and SQL/TS readiness parity.
   (name, sha256, applied_at); each migration and its ledger row commit in one transaction; an applied file whose
   checksum changed aborts the run (add a new migration instead); a Postgres advisory lock serialises runners.
   `--dry-run` lists pending files. The ledger is separate from the Supabase CLI's — use one tool per database.
+- Production marker (M1): `private.settings (key, value)`, `environment` ∈ production|staging|development, set
+  with `db:migrate -- --mark-production` (refused while SAMPLE projects exist). On a production-marked database the
+  SAMPLE seed is refused by the runner and by a guard at the top of the SAMPLE section of `seed.sql`.
 - Seed: `npm run db:seed:generate` writes `supabase/seed/seed.sql` (reference + SAMPLE projects) and
   `supabase/seed/reference.sql` (geography from `src/config/markets` + the full source registry) from
   `src/server/db/seed.ts`; a unit test fails when the committed files drift. Reference rows are upserted (repo
-  config wins); SAMPLE rows (`is_sample = true`, names start with `SAMPLE`, `example.com` URLs, published exactly
+  config wins; fixture-type sources are excluded from `reference.sql` and ship only with the SAMPLE seed, L5); SAMPLE rows (`is_sample = true`, names start with `SAMPLE`, `example.com` URLs, published exactly
   as in the fixtures) use `on conflict do nothing`, so re-runs never overwrite later edits. Deterministic ids:
   facts `<projectId>:<field>`, units `<projectId>:u<N>`, fact sources `<factId>:s<N>`.
-  `npm run db:seed` = migrate + `seed.sql`; production uses `--seed=reference` (no SAMPLE projects).
+  `npm run db:seed` / `--seed` = migrate + `reference.sql` (safe everywhere); the SAMPLE seed needs
+  `--seed=full --allow-sample` (staging/dev).
 - Staff: `npm run staff:create -- --email … --role admin|advisor [--name …] [--dry-run]`
   (`src/server/admin/staff-bootstrap.ts`): finds the Auth user by email or sends a Supabase invite (no
   passwords on the command line), then upserts `staff_profiles`. Idempotent.
@@ -140,8 +146,8 @@ policies above, the seed, and SQL/TS readiness parity.
   magic number (PDF/PNG/JPEG) against the declared type, ≤ 15 MB; stores the object; then
   `research_add_document` locks the project, re-checks the version (`conflict` if another upload won), inserts
   the row (`content_type`, `size_bytes`, `sha256`, `uploaded_by`) and audits field `documents`, action
-  `document_uploaded`, note `document uploaded: <key> v<N> (<kind>)`. A failed DB write removes
-  the stored object again.
+  `document_uploaded`, note `document uploaded: <key> v<N> (<kind>)`. A failed DB write removes the stored
+  object again — only after confirming no row references its path (L4); if that check fails the object is kept.
 - No Server Action is used, so the global Server Action body limit stays at Next's 1 MB default.
 - Download: `GET /api/staff/documents/<documentId>` — staff only; Supabase → 302 to a 60-second signed URL;
   fixture (dev, in-memory) → the bytes as an attachment with `no-store`, `nosniff` and a sandbox CSP.
@@ -166,8 +172,11 @@ policies above, the seed, and SQL/TS readiness parity.
   `src/proxy.ts` refreshes the session on `/admin/*` (per `@supabase/ssr`: `getUser()` rotates an expired token;
   new cookies go to the forwarded request and the response; a definitively signed-out user is redirected to
   login). The proxy is a fast path only — pages and actions still verify.
-- Sign-in throttle (L2, dev-grade in-memory): 10 attempts per 15 minutes per client IP, and per email in
-  Supabase mode, counted before the credential check (`src/server/services/login-throttle.ts`).
+- Sign-in throttle (L2, dev-grade, in-memory **per instance**: not shared across processes/serverless
+  instances; production also relies on Supabase Auth rate limits and edge/WAF limits): only **failed** sign-ins
+  (wrong credentials, non-staff account) count — `LOGIN_MAX_ATTEMPTS` (default 10) per client IP per
+  `LOGIN_WINDOW_SECONDS` (default 900), and 5× that per email in Supabase mode; checked before the credential
+  check (`src/server/services/login-throttle.ts`).
 - Fixture mode (dev only): `ADMIN_DEV_PASSWORD` (≥ 12 chars, constant-time compare) issues an httpOnly,
   `sameSite=lax`, 8-hour HMAC-signed cookie (`SESSION_SECRET` ≥ 32 chars). Refused when `NODE_ENV=production`.
 

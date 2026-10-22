@@ -232,4 +232,8 @@ export class FixtureResearchRepository implements ResearchRepository {
     const doc = this.store.find((p) => p.id === meta.projectId)?.documents.find((d) => d.id === documentId);
     return doc ? { ...structuredClone(doc), ...meta } : null;
   }
+
+  async documentExistsAtPath(storagePath: string): Promise<boolean> {
+    return [...this.documentMeta.values()].some((m) => m.storagePath === storagePath);
+  }
 }

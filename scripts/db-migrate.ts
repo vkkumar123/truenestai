@@ -1,16 +1,18 @@
 // Applies supabase/migrations/*.sql in order (ledger: private.schema_migrations), then optionally
 // the idempotent seed. Connection: SUPABASE_DB_URL (Postgres connection string; secret — never
 // printed). Run via npm scripts:
-//   npm run db:migrate                      migrations only
-//   npm run db:seed                         migrations + supabase/seed/seed.sql (reference + SAMPLE projects)
-//   npm run db:migrate -- --seed=reference  migrations + geography/sources only (production)
-//   npm run db:migrate -- --dry-run         list what would run
+//   npm run db:migrate                                   migrations only
+//   npm run db:seed                                      migrations + reference.sql (geography + sources)
+//   npm run db:migrate -- --seed=full --allow-sample     + fictional SAMPLE projects (staging/dev only;
+//                                                        refused on a database marked production)
+//   npm run db:migrate -- --mark-production              record private.settings environment = production
+//   npm run db:migrate -- --dry-run                      list what would run
 import path from "node:path";
 import { Client } from "pg";
 import { migrate, parseMigrateArgs, redactDbUrl } from "../src/server/db/migrate";
 
 const ROOT = path.resolve(__dirname, "..");
-const USAGE = "Usage: db-migrate [--seed | --seed=full | --seed=reference] [--dry-run]";
+const USAGE = "Usage: db-migrate [--seed | --seed=reference | --seed=full --allow-sample] [--mark-production] [--dry-run]";
 
 async function main(): Promise<number> {
   const parsed = parseMigrateArgs(process.argv.slice(2));
@@ -41,12 +43,14 @@ async function main(): Promise<number> {
       migrationsDir: path.join(ROOT, "supabase/migrations"),
       seedFiles,
       dryRun: parsed.args.dryRun,
+      sampleSeed: parsed.args.seed === "full",
+      markEnvironment: parsed.args.markProduction ? "production" : undefined,
       log: (line) => console.log(line),
     });
     console.log(
       `${parsed.args.dryRun ? "dry run: " : ""}applied ${r.applied.length}, already applied ${r.skipped.length}, seed files ${r.seeded.length}`,
     );
-    if (parsed.args.seed === "full") console.log("note: SAMPLE (fictional) projects are seeded — use --seed=reference for production.");
+    if (parsed.args.seed === "full") console.log("note: fictional SAMPLE projects were seeded (staging/dev only).");
     return 0;
   } catch (e) {
     // pg error messages do not include the connection password; still print only name/code/message.

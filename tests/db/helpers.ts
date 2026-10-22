@@ -59,9 +59,12 @@ export async function asRole<T>(
   role: DbRole,
   sub: string | null,
   fn: (c: Client) => Promise<T>,
+  /** SQL run as the superuser inside the transaction first (e.g. temporary grants); rolled back. */
+  setup?: string,
 ): Promise<T> {
   await client.query("begin");
   try {
+    if (setup) await client.query(setup);
     await client.query(`set local role ${role}`);
     await client.query("select set_config('request.jwt.claim.sub', $1, true)", [sub ?? ""]);
     return await fn(client);
@@ -77,14 +80,21 @@ export async function errorAs(
   sub: string | null,
   sql: string,
   params: unknown[] = [],
+  setup?: string,
 ): Promise<{ code?: string; message: string } | null> {
-  return asRole(client, role, sub, async (c) => {
-    try {
-      await c.query(sql, params);
-      return null;
-    } catch (err) {
-      const e = err as { code?: string; message: string };
-      return { code: e.code, message: e.message };
-    }
-  });
+  return asRole(
+    client,
+    role,
+    sub,
+    async (c) => {
+      try {
+        await c.query(sql, params);
+        return null;
+      } catch (err) {
+        const e = err as { code?: string; message: string };
+        return { code: e.code, message: e.message };
+      }
+    },
+    setup,
+  );
 }

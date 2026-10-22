@@ -63,6 +63,15 @@ async function seed(c: Client) {
   `);
 }
 
+// 0004 (L1) revoked every authenticated grant on leads / lead_events. These re-create the 0001
+// grants INSIDE a rolled-back test transaction, so the RLS policies (kept as defence in depth)
+// are still exercised.
+const LEAD_GRANTS = `
+  grant select on public.leads to authenticated;
+  grant update (status, retention_until, updated_at, name, email, phone, message, budget_band,
+    contact_consent, marketing_consent, attribution) on public.leads to authenticated;
+  grant select, insert (lead_id, actor_id, event_type, from_status, to_status) on public.lead_events to authenticated;`;
+
 const insertLead = (consent: boolean, status = "new") => [
   `insert into leads (request_type, name, email, preferred_channel, contact_consent, consent_text_version, status)
    values ('buyer_assistance', 'SAMPLE Person', 'p@example.com', 'email', $1, $2, $3)`,
@@ -185,25 +194,38 @@ d("migrations + RLS", () => {
   });
 
   describe("authenticated", () => {
-    it("advisors see and update only leads assigned to them; admins see all", async () => {
+    it("L1: authenticated has no access to leads or lead_events (service role only), even as admin", async () => {
+      for (const uid of [ADMIN_UID, STAFF_UID, OTHER_UID]) {
+        for (const [sql, params] of [
+          ["select id from leads", []],
+          ["update leads set status = 'contacted' where id = $1", [LEAD_ID]],
+          ["select id from lead_events", []],
+          ["insert into lead_events (lead_id, actor_id, event_type) values ($1, $2, 'status_changed')", [LEAD_ID, uid]],
+        ] as const) {
+          expect((await errorAs(c, "authenticated", uid, sql, [...params]))?.code, `${uid} ${sql}`).toBe("42501");
+        }
+      }
+    });
+
+    it("[policies, with test-only grants] advisors see and update only leads assigned to them; admins see all", async () => {
       const advisor = await asRole(c, "authenticated", STAFF_UID, async (q) => ({
         ids: (await q.query("select id from leads")).rows.map((x) => x.id),
         updOther: (await q.query("update leads set status = 'contacted' where id = $1", [LEAD2_ID])).rowCount,
         events: (await q.query("select distinct lead_id from lead_events")).rows.map((x) => x.lead_id),
-      }));
+      }), LEAD_GRANTS);
       expect(advisor).toEqual({ ids: [LEAD_ID], updOther: 0, events: [LEAD_ID] });
       const evErr = await errorAs(c, "authenticated", STAFF_UID,
-        "insert into lead_events (lead_id, actor_id, event_type) values ($1, $2, 'status_changed')", [LEAD2_ID, STAFF_UID]);
+        "insert into lead_events (lead_id, actor_id, event_type) values ($1, $2, 'status_changed')", [LEAD2_ID, STAFF_UID], LEAD_GRANTS);
       expect(evErr?.message).toMatch(/row-level security/);
       const admin = await asRole(c, "authenticated", ADMIN_UID, async (q) =>
-        (await q.query("select id from leads order by id")).rows.map((x) => x.id));
+        (await q.query("select id from leads order by id")).rows.map((x) => x.id), LEAD_GRANTS);
       expect(admin).toEqual([LEAD_ID, LEAD2_ID].sort());
       // assignment is not client-writable (service role after an admin check)
-      const assign = await errorAs(c, "authenticated", ADMIN_UID, "update leads set assigned_to = $1 where id = $2", [ADMIN_UID, LEAD2_ID]);
+      const assign = await errorAs(c, "authenticated", ADMIN_UID, "update leads set assigned_to = $1 where id = $2", [ADMIN_UID, LEAD2_ID], LEAD_GRANTS);
       expect(assign?.code).toBe("42501");
     });
 
-    it("staff can read and update leads", async () => {
+    it("[policies, with test-only grants] staff can read and update assigned leads", async () => {
       const r = await asRole(c, "authenticated", STAFF_UID, async (q) => {
         const before = (await q.query("select id, status from leads")).rows;
         const upd = await q.query("update leads set status = 'contacted' where id = $1", [LEAD_ID]);
@@ -212,19 +234,19 @@ d("migrations + RLS", () => {
           [LEAD_ID, STAFF_UID],
         );
         return { before, updated: upd.rowCount };
-      });
+      }, LEAD_GRANTS);
       expect(r.before).toEqual([{ id: LEAD_ID, status: "new" }]);
       expect(r.updated).toBe(1);
     });
 
     it("staff cannot make an invalid status transition", async () => {
-      const err = await errorAs(c, "authenticated", STAFF_UID, "update leads set status = 'qualified' where id = $1", [LEAD_ID]);
+      const err = await errorAs(c, "authenticated", STAFF_UID, "update leads set status = 'qualified' where id = $1", [LEAD_ID], LEAD_GRANTS);
       expect(err?.message).toMatch(/invalid lead status transition/);
     });
 
     it("staff cannot write audit events as someone else", async () => {
       const err = await errorAs(c, "authenticated", STAFF_UID,
-        "insert into lead_events (lead_id, actor_id, event_type) values ($1, $2, 'status_changed')", [LEAD_ID, OTHER_UID]);
+        "insert into lead_events (lead_id, actor_id, event_type) values ($1, $2, 'status_changed')", [LEAD_ID, OTHER_UID], LEAD_GRANTS);
       expect(err?.message).toMatch(/row-level security/);
     });
 
@@ -233,7 +255,7 @@ d("migrations + RLS", () => {
         rows: (await q.query("select * from leads")).rows,
         updated: (await q.query("update leads set status = 'contacted' where id = $1", [LEAD_ID])).rowCount,
         staff: (await q.query("select public.is_staff() as s")).rows[0].s,
-      }));
+      }), LEAD_GRANTS);
       expect(r).toEqual({ rows: [], updated: 0, staff: false });
     });
 
@@ -274,6 +296,8 @@ d("migrations + RLS", () => {
         const ok = (await q.query(call(STAFF_UID)[0], [...call(STAFF_UID)[1]])).rows[0].r.status;
         const same = (await q.query(call(STAFF_UID)[0], [...call(STAFF_UID)[1]])).rows[0].r.status;
         const ev = (await q.query("select actor_id, assigned_to from lead_events where event_type = 'assigned'")).rows;
+        await q.query("reset role");
+        await q.query(LEAD_GRANTS); // test-only, rolled back (see LEAD_GRANTS)
         await q.query("set local role authenticated");
         await q.query("select set_config('request.jwt.claim.sub', $1, true)", [STAFF_UID]);
         const visible = (await q.query("select id from leads order by id")).rows.map((x) => x.id);

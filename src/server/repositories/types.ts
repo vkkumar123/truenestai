@@ -188,6 +188,8 @@ export interface ResearchRepository {
   addDocument(record: NewDocumentRecord, actor: AuditActor): Promise<AddDocumentResult>;
   /** Staff-only lookup including the storage path (never expose it publicly). */
   getDocumentForStaff(documentId: string): Promise<StoredDocument | null>;
+  /** Whether a document row references this storage path (upload cleanup must not orphan a committed row). */
+  documentExistsAtPath(storagePath: string): Promise<boolean>;
   /** Publishing re-checks readiness under lock ("not_ready" with blockers). No-op → changed:false, no audit. */
   setPublished(projectId: string, published: boolean, actor: AuditActor): Promise<PublishWriteResult>;
   /** Oldest first. */

@@ -93,7 +93,24 @@ export interface MigrateOptions {
   seedFiles?: string[];
   /** Report what would run without changing anything. */
   dryRun?: boolean;
+  /**
+   * True when `seedFiles` include fictional SAMPLE projects (seed.sql). Refused when the database is
+   * marked `private.settings.environment = 'production'` (checked before anything is applied).
+   */
+  sampleSeed?: boolean;
+  /** Writes the deployment marker after migrating. "production" is refused if SAMPLE projects exist. */
+  markEnvironment?: DeploymentEnvironment;
   log?: (line: string) => void;
+}
+
+export type DeploymentEnvironment = "production" | "staging" | "development";
+
+/** The deployment marker (private.settings, 0004), or null when absent / not migrated yet. */
+export async function databaseEnvironment(client: SqlClient): Promise<string | null> {
+  const { rows } = await client.query("select to_regclass('private.settings') is not null as ok");
+  if (!rows[0]?.ok) return null;
+  const r = await client.query("select value from private.settings where key = 'environment'");
+  return r.rows[0] ? String(r.rows[0].value) : null;
 }
 
 export async function migrate(client: SqlClient, opts: MigrateOptions): Promise<MigrateResult> {
@@ -102,6 +119,12 @@ export async function migrate(client: SqlClient, opts: MigrateOptions): Promise<
   const result: MigrateResult = { applied: [], skipped: [], seeded: [] };
   await client.query("select pg_advisory_lock($1)", [LOCK_KEY]);
   try {
+    if (opts.sampleSeed && opts.markEnvironment === "production") {
+      throw new MigrationError("Refusing to seed SAMPLE projects into a database being marked production.");
+    }
+    if (opts.sampleSeed && (await databaseEnvironment(client)) === "production") {
+      throw new MigrationError("This database is marked production: the SAMPLE seed is refused. Use --seed=reference.");
+    }
     if (!opts.dryRun) await ensureLedger(client);
     const done = opts.dryRun
       ? await appliedMigrations(client).catch(() => new Map<string, string>())
@@ -118,6 +141,24 @@ export async function migrate(client: SqlClient, opts: MigrateOptions): Promise<
       log(`${opts.dryRun ? "would apply" : "applying"} ${f.name}`);
       if (!opts.dryRun) await client.query(transactionalScript(f));
       result.applied.push(f.name);
+    }
+    if (opts.markEnvironment) {
+      if (opts.markEnvironment === "production") {
+        const { rows } = await client.query(
+          "select to_regclass('public.projects') is not null and exists (select 1 from public.projects where is_sample) as has_sample",
+        ).catch(() => ({ rows: [{ has_sample: false }] }));
+        if (rows[0]?.has_sample) {
+          throw new MigrationError("Refusing to mark production: the database contains SAMPLE projects (is_sample = true). Remove them first.");
+        }
+      }
+      log(`${opts.dryRun ? "would mark" : "marking"} environment = ${opts.markEnvironment}`);
+      if (!opts.dryRun) {
+        await client.query(
+          `insert into private.settings (key, value) values ('environment', $1)
+           on conflict (key) do update set value = excluded.value, updated_at = now()`,
+          [opts.markEnvironment],
+        );
+      }
     }
     for (const seed of opts.seedFiles ?? []) {
       const name = path.basename(seed);
@@ -144,19 +185,32 @@ export function redactDbUrl(url: string): string {
 
 export interface MigrateCliArgs {
   seed: "none" | "reference" | "full";
+  allowSample: boolean;
+  markProduction: boolean;
   dryRun: boolean;
   help: boolean;
 }
 
-/** `--seed` / `--seed=full` (reference + SAMPLE projects), `--seed=reference`, `--dry-run`, `--help`. */
+/**
+ * `--seed` / `--seed=reference` (geography + source registry; safe everywhere),
+ * `--seed=full --allow-sample` (also fictional SAMPLE projects; staging/dev only),
+ * `--mark-production`, `--dry-run`, `--help`.
+ */
 export function parseMigrateArgs(argv: readonly string[]): { ok: true; args: MigrateCliArgs } | { ok: false; error: string } {
-  const args: MigrateCliArgs = { seed: "none", dryRun: false, help: false };
+  const args: MigrateCliArgs = { seed: "none", allowSample: false, markProduction: false, dryRun: false, help: false };
   for (const a of argv) {
     if (a === "--dry-run") args.dryRun = true;
     else if (a === "--help" || a === "-h") args.help = true;
-    else if (a === "--seed" || a === "--seed=full") args.seed = "full";
-    else if (a === "--seed=reference") args.seed = "reference";
+    else if (a === "--seed" || a === "--seed=reference") args.seed = "reference";
+    else if (a === "--seed=full") args.seed = "full";
+    else if (a === "--allow-sample") args.allowSample = true;
+    else if (a === "--mark-production") args.markProduction = true;
     else return { ok: false, error: `Unknown argument: ${a.slice(0, 40)}` };
   }
+  if (args.seed === "full" && !args.allowSample) {
+    return { ok: false, error: "--seed=full loads fictional SAMPLE projects (some published); add --allow-sample to confirm (never on production)." };
+  }
+  if (args.allowSample && args.seed !== "full") return { ok: false, error: "--allow-sample is only valid with --seed=full." };
+  if (args.markProduction && args.seed === "full") return { ok: false, error: "--mark-production cannot be combined with --seed=full." };
   return { ok: true, args };
 }

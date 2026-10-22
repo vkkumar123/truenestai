@@ -4,6 +4,7 @@
 begin;
 
 -- Reference data: market geography + source registry (upserted; repo config wins).
+-- Fixture (fictional) sources are excluded; they come only with the SAMPLE seed.
 insert into public.market_phases (id, name, sort_order, active) values
   ('north-bengaluru', 'North Bengaluru', 1, true),
   ('east-bengaluru', 'East Bengaluru (placeholder)', 2, false),
@@ -50,8 +51,6 @@ insert into public.localities (id, zone_id, name, centroid_lat, centroid_lng, al
 on conflict (id) do update set zone_id = excluded.zone_id, name = excluded.name, centroid_lat = excluded.centroid_lat, centroid_lng = excluded.centroid_lng, aliases = excluded.aliases, boundary = excluded.boundary;
 
 insert into public.sources (id, name, type, status, access_method, homepage, terms_reviewed_at, rate_limit_per_minute, storage_permissions, allowed_environments, listing_limitations, notes) values
-  ('sample-feed', 'SAMPLE Feed (fictional fixture)', 'fixture', 'approved', 'fixture', 'https://example.com/', null, 0, array['title', 'developer_name', 'locality', 'location', 'price_text', 'canonical_url', 'source_record_id', 'rera_number', 'address']::text[], array['test', 'development']::text[], array['SAMPLE fictional data for testing only. Not a real property.']::text[], 'Fictional records used for tests and local development.'),
-  ('sample-feed-mirror', 'SAMPLE Mirror Feed (fictional fixture)', 'fixture', 'approved', 'fixture', 'https://example.org/', null, 0, array['title', 'developer_name', 'locality', 'location', 'price_text', 'canonical_url', 'source_record_id', 'address']::text[], array['test', 'development']::text[], array['SAMPLE fictional data for testing only. Not a real property.']::text[], 'Second fictional fixture used to exercise cross-source deduplication.'),
   ('k-rera', 'Karnataka RERA portal (regulator)', 'regulator', 'proposed', 'link_out_only', 'https://rera.karnataka.gov.in/', null, 0, array['canonical_url']::text[], '{}'::text[], '{}'::text[], 'Candidate only. Terms of use and robots rules have NOT been reviewed. No automated access. Requires owner approval and a documented review before any status change. Intended use: link buyers to the regulator''s own record pages; regulatory research is owned by src/research.'),
   ('99acres', '99acres (listing portal)', 'listing_portal', 'proposed', 'manual', 'https://www.99acres.com/', null, 0, array['canonical_url']::text[], '{}'::text[], '{}'::text[], 'Candidate only. Terms of use and robots rules have NOT been reviewed. No automated access. Requires owner approval and a documented review before any status change. Possible routes to evaluate: partner feed, licensed data or link-out only.'),
   ('magicbricks', 'MagicBricks (listing portal)', 'listing_portal', 'proposed', 'manual', 'https://www.magicbricks.com/', null, 0, array['canonical_url']::text[], '{}'::text[], '{}'::text[], 'Candidate only. Terms of use and robots rules have NOT been reviewed. No automated access. Requires owner approval and a documented review before any status change. Possible routes to evaluate: partner feed, licensed data or link-out only.'),
@@ -61,6 +60,20 @@ on conflict (id) do update set name = excluded.name, type = excluded.type, statu
 
 -- FICTIONAL SAMPLE projects (is_sample = true; published as in the fixtures). Never real data.
 -- `on conflict do nothing`: re-running never overwrites rows edited since.
+-- M1: refuse on a database marked production (private.settings, 0004).
+do $$
+begin
+  if to_regclass('private.settings') is not null
+     and exists (select 1 from private.settings where key = 'environment' and value = 'production') then
+    raise exception 'SAMPLE seed refused: this database is marked production';
+  end if;
+end $$;
+
+insert into public.sources (id, name, type, status, access_method, homepage, terms_reviewed_at, rate_limit_per_minute, storage_permissions, allowed_environments, listing_limitations, notes) values
+  ('sample-feed', 'SAMPLE Feed (fictional fixture)', 'fixture', 'approved', 'fixture', 'https://example.com/', null, 0, array['title', 'developer_name', 'locality', 'location', 'price_text', 'canonical_url', 'source_record_id', 'rera_number', 'address']::text[], array['test', 'development']::text[], array['SAMPLE fictional data for testing only. Not a real property.']::text[], 'Fictional records used for tests and local development.'),
+  ('sample-feed-mirror', 'SAMPLE Mirror Feed (fictional fixture)', 'fixture', 'approved', 'fixture', 'https://example.org/', null, 0, array['title', 'developer_name', 'locality', 'location', 'price_text', 'canonical_url', 'source_record_id', 'address']::text[], array['test', 'development']::text[], array['SAMPLE fictional data for testing only. Not a real property.']::text[], 'Second fictional fixture used to exercise cross-source deduplication.')
+on conflict (id) do update set name = excluded.name, type = excluded.type, status = excluded.status, access_method = excluded.access_method, homepage = excluded.homepage, terms_reviewed_at = excluded.terms_reviewed_at, rate_limit_per_minute = excluded.rate_limit_per_minute, storage_permissions = excluded.storage_permissions, allowed_environments = excluded.allowed_environments, listing_limitations = excluded.listing_limitations, notes = excluded.notes;
+
 insert into public.developers (id, name, is_sample) values
   ('sample-dev-a', 'SAMPLE Developer A', true),
   ('sample-dev-b', 'SAMPLE Developer B', true),

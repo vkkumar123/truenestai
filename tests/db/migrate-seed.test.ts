@@ -3,7 +3,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import path from "node:path";
 import type { Client } from "pg";
-import { asRole, REPO_ROOT, resetSchemas, tryConnect } from "./helpers";
+import { asRole, errorAs, REPO_ROOT, resetSchemas, tryConnect } from "./helpers";
 
 vi.mock("server-only", () => ({}));
 
@@ -34,8 +34,8 @@ d("migration runner + seed", () => {
   });
 
   it("applies every migration once, with a ledger, then the seed", async () => {
-    const r = await migrate(c, { migrationsDir: MIGRATIONS, seedFiles: [SEED] });
-    expect(r.applied).toEqual(["0001_core.sql", "0002_research_audit.sql", "0003_m2_live.sql"]);
+    const r = await migrate(c, { migrationsDir: MIGRATIONS, seedFiles: [SEED], sampleSeed: true });
+    expect(r.applied).toEqual(["0001_core.sql", "0002_research_audit.sql", "0003_m2_live.sql", "0004_m2_review.sql"]);
     expect(r.seeded).toEqual(["seed.sql"]);
     const ledger = (await c.query("select name, length(checksum) as len from private.schema_migrations order by name")).rows;
     expect(ledger).toEqual(r.applied.map((name) => ({ name, len: 64 })));
@@ -43,9 +43,9 @@ d("migration runner + seed", () => {
 
   it("re-running is a no-op (migrations skipped, seed idempotent)", async () => {
     const before = await Promise.all(["projects", "facts", "fact_sources", "sources", "localities"].map((t) => count(c, t)));
-    const r = await migrate(c, { migrationsDir: MIGRATIONS, seedFiles: [SEED, REFERENCE] });
+    const r = await migrate(c, { migrationsDir: MIGRATIONS, seedFiles: [SEED, REFERENCE], sampleSeed: true });
     expect(r.applied).toEqual([]);
-    expect(r.skipped).toHaveLength(3);
+    expect(r.skipped).toHaveLength(4);
     const after = await Promise.all(["projects", "facts", "fact_sources", "sources", "localities"].map((t) => count(c, t)));
     expect(after).toEqual(before);
   });
@@ -93,6 +93,43 @@ d("migration runner + seed", () => {
     expect(r.factProjects).toEqual(published);
     expect(r.index).toEqual(published);
     expect(published.length).toBeLessThan(SAMPLE_PROJECTS.length); // at least one draft stays hidden
+  });
+
+  it("M1: production marker refuses the SAMPLE seed (runner and seed.sql itself); marking refuses SAMPLE data", async () => {
+    // A database that already holds SAMPLE projects cannot be marked production.
+    await expect(migrate(c, { migrationsDir: MIGRATIONS, markEnvironment: "production" })).rejects.toThrow(/contains SAMPLE projects/);
+    await expect(migrate(c, { migrationsDir: MIGRATIONS, markEnvironment: "production", sampleSeed: true, seedFiles: [SEED] }))
+      .rejects.toThrow(/being marked production/);
+    await c.query("begin");
+    try {
+      await c.query("delete from projects where is_sample; delete from developers where is_sample");
+      await c.query("insert into private.settings (key, value) values ('environment', 'production')");
+      await expect(migrate(c, { migrationsDir: MIGRATIONS, seedFiles: [SEED], sampleSeed: true })).rejects.toThrow(/marked production/);
+      await c.query("savepoint s");
+      // even applying seed.sql directly (psql / SQL editor) is refused
+      await expect(c.query((await import("node:fs")).readFileSync(SEED, "utf8").replace(/^begin;$/m, "").replace(/^commit;$/m, "")))
+        .rejects.toThrow(/SAMPLE seed refused/);
+      await c.query("rollback to savepoint s");
+      expect(await count(c, "projects")).toBe(0);
+    } finally {
+      await c.query("rollback");
+    }
+    // the reference seed stays allowed on production
+    await c.query("begin");
+    try {
+      await c.query("insert into private.settings (key, value) values ('environment', 'production')");
+      await c.query((await import("node:fs")).readFileSync(REFERENCE, "utf8").replace(/^begin;$/m, "").replace(/^commit;$/m, ""));
+    } finally {
+      await c.query("rollback");
+    }
+    expect((await c.query("select count(*)::int as n from private.settings")).rows[0].n).toBe(0);
+    expect((await errorAs(c, "authenticated", null, "select * from private.settings"))?.code).toBe("42501");
+  });
+
+  it("L5: reference seed carries no fixture sources; the SAMPLE seed adds them", async () => {
+    const { readFileSync } = await import("node:fs");
+    expect(readFileSync(REFERENCE, "utf8")).not.toMatch(/'fixture'/);
+    expect(readFileSync(SEED, "utf8")).toMatch(/'sample-feed'/);
   });
 
   // R4: SQL readiness/completeness must equal the TS rules on fixture-shaped projects.

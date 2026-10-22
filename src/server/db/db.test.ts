@@ -18,9 +18,11 @@ describe("seed builder", () => {
 
   it("reference-only seed contains no projects; full seed uses idempotent conflict clauses", () => {
     const ref = buildSeedSql({ sample: false });
+    const full = buildSeedSql();
     expect(ref).not.toMatch(/insert into public\.projects/);
     expect(ref).toMatch(/insert into public\.sources/);
-    const full = buildSeedSql();
+    expect(ref).not.toMatch(/'fixture'/); // L5
+    expect(full).toMatch(/SAMPLE seed refused: this database is marked production/);
     for (const t of ["developers", "projects", "facts", "fact_sources"]) {
       expect(full).toMatch(new RegExp(`insert into public\\.${t} [\\s\\S]*?on conflict do nothing;`));
     }
@@ -43,9 +45,17 @@ describe("seed builder", () => {
 
 describe("migration runner helpers", () => {
   it("parses CLI args", () => {
-    expect(parseMigrateArgs([])).toEqual({ ok: true, args: { seed: "none", dryRun: false, help: false } });
-    expect(parseMigrateArgs(["--seed", "--dry-run"])).toMatchObject({ ok: true, args: { seed: "full", dryRun: true } });
+    expect(parseMigrateArgs([])).toEqual({
+      ok: true, args: { seed: "none", allowSample: false, markProduction: false, dryRun: false, help: false },
+    });
+    // M1: bare --seed is reference-only; the SAMPLE seed needs an explicit opt-in
+    expect(parseMigrateArgs(["--seed", "--dry-run"])).toMatchObject({ ok: true, args: { seed: "reference", dryRun: true } });
     expect(parseMigrateArgs(["--seed=reference"])).toMatchObject({ ok: true, args: { seed: "reference" } });
+    expect(parseMigrateArgs(["--seed=full"])).toMatchObject({ ok: false, error: expect.stringMatching(/--allow-sample/) });
+    expect(parseMigrateArgs(["--seed=full", "--allow-sample"])).toMatchObject({ ok: true, args: { seed: "full", allowSample: true } });
+    expect(parseMigrateArgs(["--allow-sample"])).toMatchObject({ ok: false });
+    expect(parseMigrateArgs(["--mark-production", "--seed"])).toMatchObject({ ok: true, args: { markProduction: true, seed: "reference" } });
+    expect(parseMigrateArgs(["--mark-production", "--seed=full", "--allow-sample"])).toMatchObject({ ok: false });
     expect(parseMigrateArgs(["--seed=everything"])).toMatchObject({ ok: false });
   });
 

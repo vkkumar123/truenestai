@@ -118,4 +118,21 @@ describe("uploadProjectDocument (fixture storage)", () => {
     expect(await uploadProjectDocument(input(), { repos, requireStaff: admin })).toMatchObject({ ok: false, error: "conflict" });
     expect((repos.documentStorage as unknown as { size: number }).size).toBe(1);
   });
+
+  it("L4: an error after the row committed does not delete the stored object", async () => {
+    const repos = createFixtureRepositories();
+    const realAdd = repos.research.addDocument.bind(repos.research);
+    repos.research.addDocument = async (rec, actor) => {
+      await realAdd(rec, actor); // row committed…
+      throw new Error("response lost"); // …but the caller sees a failure
+    };
+    await expect(uploadProjectDocument(input(), { repos, requireStaff: admin })).rejects.toThrow(/response lost/);
+    expect((repos.documentStorage as unknown as { size: number }).size).toBe(1);
+    // a failure BEFORE any row exists still cleans up
+    repos.research.addDocument = async () => {
+      throw new Error("db down");
+    };
+    await expect(uploadProjectDocument(input(), { repos, requireStaff: admin })).rejects.toThrow(/db down/);
+    expect((repos.documentStorage as unknown as { size: number }).size).toBe(1);
+  });
 });

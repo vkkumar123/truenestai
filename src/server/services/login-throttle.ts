@@ -1,32 +1,58 @@
 import "server-only";
+import { loginRateLimit } from "../env";
 import { FixedWindowRateLimiter } from "./rate-limit";
 
-/** Staff sign-in attempts allowed per client key (and per email) per window. */
-export const LOGIN_MAX_ATTEMPTS = 10;
-export const LOGIN_WINDOW_MS = 15 * 60 * 1000;
-export const LOGIN_THROTTLED_MESSAGE = "Too many sign-in attempts. Please wait 15 minutes and try again.";
+// L2 staff sign-in throttle. DEV-GRADE and PER INSTANCE: counters live in this server process's
+// memory (reset on restart, not shared between instances/serverless workers), so production also
+// relies on Supabase Auth's own rate limits and edge/WAF limits.
+// Only FAILED attempts count. Limits (env, defaults): LOGIN_MAX_ATTEMPTS=10 failures per client IP
+// per LOGIN_WINDOW_SECONDS=900; per email (Supabase mode) EMAIL_LIMIT_FACTOR × that, so a single
+// attacker IP is stopped first and a distributed guess against one account is still bounded,
+// while locking a staff member out takes many IPs.
 
-const KEY = Symbol.for("truenest.loginLimiter");
-type G = typeof globalThis & { [KEY]?: FixedWindowRateLimiter };
+export const EMAIL_LIMIT_FACTOR = 5;
+export const LOGIN_THROTTLED_MESSAGE = "Too many failed sign-in attempts. Please wait and try again later.";
 
-/** Process-wide DEV-GRADE limiter (see rate-limit.ts caveats); keys are hashed. */
-export function loginLimiter(): FixedWindowRateLimiter {
-  const g = globalThis as G;
-  return (g[KEY] ??= new FixedWindowRateLimiter(LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW_MS));
+export interface LoginLimiters {
+  ip: FixedWindowRateLimiter;
+  email: FixedWindowRateLimiter;
 }
 
-/**
- * L2: counts one sign-in attempt per client key and (Supabase mode) per normalised email, before
- * any credential check, so password guessing against the dev password or a staff account is
- * bounded per instance. Returns false when any key is over the limit.
- */
-export function allowLoginAttempt(
-  input: { ipKey: string; email?: string | null; now?: number },
-  limiter: FixedWindowRateLimiter = loginLimiter(),
-): boolean {
-  const at = input.now ?? Date.now();
-  const keys = [`login:ip:${input.ipKey}`];
-  if (input.email) keys.push(`login:email:${input.email.trim().toLowerCase()}`);
-  // Hit every key (no short-circuit) so a blocked IP still counts against the email and vice versa.
-  return keys.map((k) => limiter.hit(k, at).allowed).every(Boolean);
+const KEY = Symbol.for("truenest.loginLimiters");
+type G = typeof globalThis & { [KEY]?: LoginLimiters };
+
+export function createLoginLimiters(max: number, windowMs: number): LoginLimiters {
+  return { ip: new FixedWindowRateLimiter(max, windowMs), email: new FixedWindowRateLimiter(max * EMAIL_LIMIT_FACTOR, windowMs) };
+}
+
+/** Process-wide limiters (keys are hashed; no raw IPs or emails are held). */
+export function loginLimiters(): LoginLimiters {
+  const g = globalThis as G;
+  if (!g[KEY]) {
+    const { max, windowMs } = loginRateLimit();
+    g[KEY] = createLoginLimiters(max, windowMs);
+  }
+  return g[KEY]!;
+}
+
+export interface LoginAttemptKey {
+  ipKey: string;
+  email?: string | null;
+  now?: number;
+}
+
+const emailKey = (email: string) => `login:email:${email.trim().toLowerCase()}`;
+
+/** Checked BEFORE credentials; records nothing. */
+export function isLoginThrottled(k: LoginAttemptKey, limiters: LoginLimiters = loginLimiters()): boolean {
+  const at = k.now ?? Date.now();
+  if (limiters.ip.isBlocked(`login:ip:${k.ipKey}`, at)) return true;
+  return !!k.email && limiters.email.isBlocked(emailKey(k.email), at);
+}
+
+/** Call only after a failed credential check. */
+export function recordLoginFailure(k: LoginAttemptKey, limiters: LoginLimiters = loginLimiters()): void {
+  const at = k.now ?? Date.now();
+  limiters.ip.hit(`login:ip:${k.ipKey}`, at);
+  if (k.email) limiters.email.hit(emailKey(k.email), at);
 }

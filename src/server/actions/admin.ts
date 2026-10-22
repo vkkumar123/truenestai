@@ -8,7 +8,7 @@ import { safeAdminPath } from "../redirects";
 import { ensureRenderPhaseAfterAction } from "./mpa";
 import { requestClientKey } from "../client-ip";
 import { log } from "../log";
-import { allowLoginAttempt, LOGIN_THROTTLED_MESSAGE } from "../services/login-throttle";
+import { isLoginThrottled, LOGIN_THROTTLED_MESSAGE, recordLoginFailure } from "../services/login-throttle";
 
 const LOGIN_PATH = "/admin/login";
 
@@ -28,8 +28,9 @@ export async function adminLoginAction(_prev: AdminLoginState, formData: FormDat
   if (supabaseMode && (typeof email !== "string" || !/^[^\s@]+@[^\s@]+$/.test(email) || email.length > 254)) {
     return { status: "error", message: "Enter a valid email address." };
   }
-  // L2: throttle per client IP (and per email in Supabase mode) before checking credentials.
-  if (!allowLoginAttempt({ ipKey: await requestClientKey(), email: supabaseMode ? (email as string) : null })) {
+  // L2: refuse while this IP (or, in Supabase mode, this email) has too many recent FAILED attempts.
+  const attempt = { ipKey: await requestClientKey(), email: supabaseMode ? (email as string) : null };
+  if (isLoginThrottled(attempt)) {
     log.warn("auth.login_throttled");
     ensureRenderPhaseAfterAction("/admin/login");
     return { status: "error", message: LOGIN_THROTTLED_MESSAGE };
@@ -38,6 +39,8 @@ export async function adminLoginAction(_prev: AdminLoginState, formData: FormDat
     ? await loginWithSupabasePassword((email as string).trim(), password)
     : await loginWithDevPassword(password);
   if (!result.ok) {
+    // Count wrong credentials and non-staff accounts; not server misconfiguration.
+    if (result.error === "invalid_credentials" || result.error === "not_staff") recordLoginFailure(attempt);
     ensureRenderPhaseAfterAction("/admin/login"); // failed login re-renders the page; see mpa.ts
     return { status: "error", message: result.message };
   }

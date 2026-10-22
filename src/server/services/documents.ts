@@ -73,7 +73,7 @@ const fail = (error: DocumentErrorCode, message: string, errors?: string[]): Upl
 /**
  * Validates metadata + bytes, allocates the next version, stores the object (never overwriting),
  * then records the row + audit event atomically. If the DB write fails after the object was
- * stored, the object is removed again (best effort) so no orphan stays referenced by nothing.
+ * stored, the object is removed again (best effort) — but only when no row references its path.
  */
 export async function uploadProjectDocument(input: UploadDocumentInput, deps: DocumentDeps = {}): Promise<UploadDocumentResult> {
   const session = await (deps.requireStaff ?? requireStaff)();
@@ -127,7 +127,15 @@ export async function uploadProjectDocument(input: UploadDocumentInput, deps: Do
       { actorId: session.userId, actorRole: session.role },
     );
   } catch (e) {
-    await repos.documentStorage.remove(path).catch(() => log.warn("documents.orphan_cleanup_failed", { projectId: project.id }));
+    // L4: the error may have come AFTER the row committed (e.g. a failed read-back or a lost
+    // response). Remove the object only when no row references it; if that cannot be checked,
+    // keep the object (an unreferenced object is harmless; a row without its file is not).
+    const referenced = await repos.research.documentExistsAtPath(path).catch(() => true);
+    if (!referenced) {
+      await repos.documentStorage.remove(path).catch(() => log.warn("documents.orphan_cleanup_failed", { projectId: project.id }));
+    } else {
+      log.warn("documents.upload_outcome_uncertain", { projectId: project.id });
+    }
     throw e;
   }
   if (!added.ok) {

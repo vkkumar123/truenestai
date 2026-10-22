@@ -6,7 +6,7 @@ import { getSource } from "@/discovery";
 import { parseLeadInput } from "@/leads/validation";
 import { qualifyLead } from "@/leads/qualification";
 import { computeRetentionUntil, redactLeadForLog } from "@/leads/retention";
-import { requireStaff, type StaffSession } from "../auth";
+import { requireStaff, StaffAuthError, type StaffSession } from "../auth";
 import { leadRateLimit } from "../env";
 import { log } from "../log";
 import { getRepositories, type LeadFilter, type Repositories, type StaffMember, type StoredLead } from "../repositories";
@@ -194,9 +194,10 @@ export async function getLead(id: string, deps: LeadServiceDeps = {}): Promise<S
   return lead && canSeeLead(session, lead) ? (await withSubjects([lead], repos))[0] : null;
 }
 
-/** Staff only. Members leads can be assigned to (for the admin assignment picker). */
+/** Admin only (throws StaffAuthError "forbidden" for advisors). Members leads can be assigned to. */
 export async function listAssignableStaff(deps: LeadServiceDeps = {}): Promise<StaffMember[]> {
-  await (deps.requireStaff ?? requireStaff)();
+  const session = await (deps.requireStaff ?? requireStaff)();
+  if (session.role !== "admin") throw new StaffAuthError("forbidden", "Only an admin can view the staff list.");
   return (deps.repos ?? getRepositories()).leads.listStaff();
 }
 

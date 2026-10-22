@@ -283,4 +283,10 @@ export class SupabaseResearchRepository implements ResearchRepository {
       sha256: d.sha256,
     };
   }
+
+  async documentExistsAtPath(storagePath: string): Promise<boolean> {
+    const { data, error } = await this.db().from("project_documents").select("id").eq("storage_path", storagePath).limit(1);
+    if (error) throw new Error(`document path lookup failed (${error.code ?? "unknown"})`);
+    return (data as unknown[]).length > 0;
+  }
 }

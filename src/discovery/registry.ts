@@ -35,6 +35,9 @@ export interface SourceEntry {
   notes: string;
 }
 
+/** Limitation shown on every listing found by automated web research (after "Not verified by TrueNest"). */
+export const RESEARCH_LIMITATION = "Found by automated web research; details may be out of date or incomplete.";
+
 const NOT_REVIEWED =
   "Candidate only. Terms of use and robots rules have NOT been reviewed. No automated access. Requires owner approval and a documented review before any status change.";
 
@@ -70,6 +73,45 @@ export const SOURCE_REGISTRY: readonly SourceEntry[] = [
     notes: "Second fictional fixture used to exercise cross-source deduplication.",
   },
   {
+    id: "sample-web-research",
+    name: "SAMPLE Web Research (fictional fixture)",
+    type: "fixture",
+    status: "approved",
+    accessMethod: "fixture",
+    homepage: "https://example.com/",
+    termsReviewedAt: null,
+    robotsNotes: "Not applicable: fake research client over fictional example.com pages, no network access.",
+    rateLimitPerMinute: 0,
+    storagePermissions: ["title", "developer_name", "locality", "price_text", "canonical_url", "rera_number", "address"],
+    allowedEnvironments: ["test", "development"],
+    listingLimitations: [RESEARCH_LIMITATION, "SAMPLE fictional data for testing only. Not a real property."],
+    notes: "Stands in for anthropic-web-search in fixture mode, tests and CI (fake research client, never the network).",
+  },
+  {
+    id: "anthropic-web-search",
+    name: "Web research (Anthropic web search)",
+    // Results are mostly developer pages surfaced by web search; listing portals are excluded.
+    type: "developer",
+    // Approved by the owner 2026-10-22 (D16).
+    status: "approved",
+    accessMethod: "api",
+    homepage: "https://www.anthropic.com/",
+    termsReviewedAt: "2026-10-22",
+    robotsNotes:
+      "No crawling by TrueNest. Pages are searched and read only by Anthropic's server-side web search tool through the Messages API; the worker never fetches a page itself.",
+    rateLimitPerMinute: 10,
+    storagePermissions: ["title", "developer_name", "locality", "price_text", "canonical_url", "rera_number", "address"],
+    // Staging also runs NODE_ENV=production. Test, CI and local development use the
+    // sample-web-research fixture source with the fake client instead.
+    allowedEnvironments: ["production"],
+    listingLimitations: [RESEARCH_LIMITATION],
+    notes:
+      "Approved 2026-10-22 by the owner (DECISIONS D16: web search + developer sites; K-RERA link-out only). " +
+      "Stores only short factual fields that appear verbatim in a citation the API returned for a page in that response's search results, plus the cited URL (src/discovery/research/validate.ts). " +
+      "Listing portals whose terms forbid reuse are blocked in the search and never stored. " +
+      "A RERA number may be stored when it appears verbatim in a citation, including one pointing at a Karnataka RERA page that web search surfaced; the worker never fetches K-RERA pages itself (D16).",
+  },
+  {
     id: "k-rera",
     name: "Karnataka RERA portal (regulator)",
     type: "regulator",
@@ -77,12 +119,14 @@ export const SOURCE_REGISTRY: readonly SourceEntry[] = [
     accessMethod: "link_out_only",
     homepage: "https://rera.karnataka.gov.in/",
     termsReviewedAt: null,
-    robotsNotes: "Not reviewed.",
+    robotsNotes: "2026-10-22: the automated fetch of robots.txt was refused as robots-disallowed. No crawler or automated access, ever (D16).",
     rateLimitPerMinute: 0,
     storagePermissions: ["canonical_url"],
     allowedEnvironments: [],
     listingLimitations: [],
-    notes: `${NOT_REVIEWED} Intended use: link buyers to the regulator's own record pages; regulatory research is owned by src/research.`,
+    notes:
+      "Never runnable: automated access is robots-disallowed (D16). Link-out and manual staff lookups only. " +
+      "A RERA number seen verbatim in an anthropic-web-search citation (including one pointing at a K-RERA page) is stored under that source, not this one. Regulatory research is owned by src/research.",
   },
   ...(
     [
@@ -109,6 +153,13 @@ export const SOURCE_REGISTRY: readonly SourceEntry[] = [
     }),
   ),
 ];
+
+/** Sources filled by on-demand research jobs (src/discovery/research), never by search-time adapters. */
+export const WEB_RESEARCH_SOURCE_IDS = ["anthropic-web-search", "sample-web-research"] as const;
+
+export function isWebResearchSource(id: string): boolean {
+  return (WEB_RESEARCH_SOURCE_IDS as readonly string[]).includes(id);
+}
 
 export class SourceNotRunnableError extends Error {
   constructor(sourceId: string, reason: string) {

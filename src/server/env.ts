@@ -121,3 +121,45 @@ export function adminDevPassword(env: NodeJS.ProcessEnv = process.env): string {
   }
   return p;
 }
+
+// --- On-demand web research (docs/RESEARCH_WORKER.md) ---------------------------------------
+
+export const MIN_RESEARCH_RUN_SECRET_LENGTH = 32;
+export const DEFAULT_ANTHROPIC_MODEL = "claude-opus-5-5";
+
+/** Hours a finished research job for the same query is reused instead of researching again. */
+export function researchCacheHours(env: NodeJS.ProcessEnv = process.env): number {
+  return intEnv(env.RESEARCH_CACHE_HOURS, 168, 1, 24 * 90, "RESEARCH_CACHE_HOURS");
+}
+
+/** Global cap on research jobs enqueued per rolling 24 hours (cost guardrail). */
+export function researchMaxJobsPerDay(env: NodeJS.ProcessEnv = process.env): number {
+  return intEnv(env.RESEARCH_MAX_JOBS_PER_DAY, 50, 0, 10_000, "RESEARCH_MAX_JOBS_PER_DAY");
+}
+
+/** Jobs processed per worker run. */
+export function researchBatchSize(env: NodeJS.ProcessEnv = process.env): number {
+  return intEnv(env.RESEARCH_BATCH_SIZE, 3, 1, 20, "RESEARCH_BATCH_SIZE");
+}
+
+/**
+ * Shared secret for POST /api/internal/research/run. null when unset or shorter than 32
+ * characters: the endpoint then answers 404 (it does not exist). Never log it.
+ */
+export function researchRunSecret(env: NodeJS.ProcessEnv = process.env): string | null {
+  const s = env.RESEARCH_RUN_SECRET ?? "";
+  return s.length >= MIN_RESEARCH_RUN_SECRET_LENGTH ? s : null;
+}
+
+/** Anthropic API key for the research worker. Throws ConfigError when unset. Never log it. */
+export function anthropicApiKey(env: NodeJS.ProcessEnv = process.env): string {
+  const k = env.ANTHROPIC_API_KEY?.trim();
+  if (!k) throw new ConfigError("ANTHROPIC_API_KEY must be set to run web research (see .env.example).");
+  return k;
+}
+
+export function anthropicModel(env: NodeJS.ProcessEnv = process.env): string {
+  const m = env.ANTHROPIC_MODEL?.trim() || DEFAULT_ANTHROPIC_MODEL;
+  if (!/^[a-z0-9][a-z0-9.\-]{1,80}$/.test(m)) throw new ConfigError("ANTHROPIC_MODEL must be a model id like claude-opus-5-5.");
+  return m;
+}

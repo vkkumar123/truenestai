@@ -18,13 +18,36 @@ describe("source registry gating", () => {
     const s = { ...getSource("sample-feed")!, type: "partner_feed" as const, allowedEnvironments: ["test" as const] };
     expect(isRunnable(s, "production")).toBe(false);
   });
-  it("only fixtures are approved; real candidates have no ToS review and no automated access", () => {
-    for (const s of SOURCE_REGISTRY.filter((s) => s.type !== "fixture")) {
+  it("only fixtures and the owner-approved web research source are approved; other candidates have no automated access", () => {
+    for (const s of SOURCE_REGISTRY.filter((s) => s.type !== "fixture" && s.id !== "anthropic-web-search")) {
       expect(s.status).toBe("proposed");
       expect(["link_out_only", "manual"]).toContain(s.accessMethod);
       expect(s.termsReviewedAt).toBeNull();
       expect(s.rateLimitPerMinute).toBe(0);
       expect(s.allowedEnvironments).toEqual([]);
     }
+  });
+  it("web research source is approved (D16) for production only", () => {
+    const w = getSource("anthropic-web-search")!;
+    expect(w.status).toBe("approved");
+    expect(w.accessMethod).toBe("api");
+    expect(w.termsReviewedAt).toBe("2026-10-22");
+    expect(isRunnable(w, "production")).toBe(true);
+    for (const env of ["test", "development"] as const) expect(isRunnable(w, env)).toBe(false);
+  });
+  it("K-RERA is link-out only and never runnable (robots-disallowed, D16)", () => {
+    const k = getSource("k-rera")!;
+    expect(k.accessMethod).toBe("link_out_only");
+    for (const env of ["test", "development", "production"] as const) expect(isRunnable(k, env)).toBe(false);
+  });
+  it("research sources: the fixture runs only in test/dev; the real one never in test", () => {
+    const fixture = getSource("sample-web-research")!;
+    expect(isRunnable(fixture, "test")).toBe(true);
+    expect(isRunnable(fixture, "production")).toBe(false);
+    const real = getSource("anthropic-web-search")!;
+    expect(real.accessMethod).toBe("api");
+    expect(isRunnable(real, "test")).toBe(false);
+    // Even once approved for production, test stays blocked unless explicitly listed.
+    expect(isRunnable({ ...real, status: "approved", allowedEnvironments: ["production"] }, "test")).toBe(false);
   });
 });

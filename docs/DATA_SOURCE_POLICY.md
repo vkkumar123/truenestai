@@ -59,3 +59,26 @@ Prices are "as listed by the source". Fixture records are marked `isSample: true
 - Re-review the terms and robots rules of every approved source at least every 6 months, and whenever its terms change.
 - Re-check rate limits and storage permissions at the same time, and record the date in `termsReviewedAt`.
 - Review proposed sources each quarter, and reject the ones we will not pursue.
+
+## 11. Registry entries: current status
+
+| Source id | Type | Status | Access | Runs in | Notes |
+|---|---|---|---|---|---|
+| `sample-feed`, `sample-feed-mirror` | fixture | approved | fixture | test, development | Fictional Lane B records. Never production. |
+| `sample-web-research` | fixture | approved | fixture | test, development | Stands in for `anthropic-web-search` in fixture mode, unit tests, e2e and CI. Uses the fake research client; never the network. |
+| `anthropic-web-search` | developer | **proposed** (pending the approval change) | api | none until approved; intended `production` (staging also runs `NODE_ENV=production`) | See 11.1. |
+| `k-rera` | regulator | proposed, never runnable | link_out_only | none | robots.txt disallows automated access (checked 2026-10-22, D16). No crawler, ever. Link-out and manual staff lookups only. |
+| `99acres`, `magicbricks`, `housing-com`, `nobroker` | listing_portal | proposed | manual | none | Not reviewed. Also blocked from web research (11.2). |
+
+### 11.1 `anthropic-web-search` (on-demand web research)
+- **Decision:** the owner chose "Web search + developer sites + K-RERA" on 2026-10-22 (DECISIONS D16). The registry entry is still `proposed`; the orchestrator records the approval by setting `status: "approved"`, `termsReviewedAt: "2026-10-22"`, `rateLimitPerMinute` and `allowedEnvironments: ["production"]`. Until then `assertRunnable` refuses it everywhere and the worker answers 503 `source_not_runnable`.
+- **Access method:** `api`. TrueNest calls Anthropic's Messages API with the server-side web search tool. Anthropic searches and reads the pages; TrueNest never fetches, crawls or scrapes a page, and never fetches K-RERA pages.
+- **What may be stored:** short factual fields only (title, developer name, locality, address, price text as shown, RERA number) plus the cited page URL. Each one is stored only when its value appears verbatim in a citation the API returned for that URL, and only when the URL appeared in that response's web search results (`src/discovery/research/validate.ts`). The model's own JSON, including its own quote field, is never treated as evidence.
+- **Locality:** a candidate must map to exactly one active locality in `src/config/markets/` through the existing alias matching, and that locality must itself appear in the citation. Anything else is dropped.
+- **RERA numbers:** may be stored when cited verbatim, including in a citation that points at a K-RERA page that web search surfaced (D16). RERA registration is not title clearance. A listing links to a researched project only by RERA number, as for every Lane B source.
+- **Labels:** every stored listing is Lane B with "Not verified by TrueNest" first, then "Found by automated web research; details may be out of date or incomplete", the source name, the cited URL, and the discovered and last-seen dates. Nothing becomes a researched (Lane A) project automatically, and the worker never publishes or verifies anything.
+- **One page, one record:** when one cited page yields several different project names, all of them are dropped. The canonical URL is a strong dedupe key, so they would otherwise merge.
+- **Takedown:** deleting an `external_listings` row also removes its research-job link. Suspending the source hides every stored result at once, because search shows research listings only while the source is runnable.
+
+### 11.2 Listing portals excluded from research
+`99acres.com`, `magicbricks.com`, `housing.com`, `nobroker.in`, `commonfloor.com`, `squareyards.com` and `makaan.com`, including their subdomains, are passed to the web search tool as `blocked_domains`. Any candidate whose URL is on one of these hosts is dropped (`src/discovery/research/portals.ts`). We do **not** keep a link-out row for them: their registry entries are not approved, and a link-out row would still copy the portal's title and facts. Revisit this only if a portal is approved as `link_out_only` or under an agreement.

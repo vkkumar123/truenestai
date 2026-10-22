@@ -26,6 +26,11 @@ export async function AdminNav() {
               Projects
             </Link>
           </li>
+          <li>
+            <Link href="/admin/research-jobs" className="rounded-md px-3 py-1.5 font-medium hover:bg-muted">
+              Research jobs
+            </Link>
+          </li>
         </ul>
       </nav>
       <div className="flex items-center gap-2 text-xs text-muted-foreground">

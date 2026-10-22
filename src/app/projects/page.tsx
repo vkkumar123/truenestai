@@ -5,6 +5,8 @@ import { connection } from "next/server";
 import { Info } from "lucide-react";
 import { getLocality, listLocalities } from "@/config/markets";
 import { searchProperties } from "@/server/services/search";
+import { requestResearchOnMiss } from "@/server/services/research-jobs";
+import { requestClientKey } from "@/server/client-ip";
 import { Alert, AlertTitle } from "@/components/ui/alert";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/components/ui/cn";
@@ -15,6 +17,7 @@ import { withCompare } from "@/components/property/compare-url";
 import { EXTERNAL_LABEL, ExternalListingCard } from "@/components/property/external-card";
 import { ProjectCard } from "@/components/property/project-card";
 import { LocalitySearch } from "@/components/site/locality-search";
+import { formatDate } from "@/components/property/format";
 import { ResultsSkeleton } from "./results-skeleton";
 
 export const metadata: Metadata = {
@@ -76,6 +79,11 @@ async function Results({ searchParams }: { searchParams: PageProps<"/projects">[
   });
   const { researched, external, externalErrors, notes, matchedProjects } = result;
   const total = researched.length + external.length;
+  // A free-text miss in both lanes starts (or reuses) on-demand web research. Request-time only.
+  const isMiss = Boolean(q) && result.externalQueried && !externalErrors?.length && total === 0;
+  const research = isMiss
+    ? await requestResearchOnMiss({ queryText: q, localityId: locality || null, clientKey: await requestClientKey() })
+    : null;
   const filterText = [bhk ? `${bhk} BHK` : "", status ? CONSTRUCTION_STATUS_LABELS[status] : ""].filter(Boolean).join(", ");
 
   return (
@@ -91,6 +99,31 @@ async function Results({ searchParams }: { searchParams: PageProps<"/projects">[
         {q ? ` matching “${q}”` : ""}
         {filterText ? ` (${filterText})` : ""}.
       </p>
+
+      {research?.state === "researching" ? (
+        <Alert tone="info" role="status">
+          <AlertTitle>We’re researching “{research.queryText}” now</AlertTitle>
+          <p>
+            Results usually appear within a few minutes; refresh this page to check. Anything we find comes from public web
+            pages and is labelled unverified until TrueNest checks it.
+          </p>
+        </Alert>
+      ) : research?.state === "searched_none" ? (
+        <Alert role="status">
+          <AlertTitle>We searched public web sources for “{research.queryText}” on {formatDate(research.searchedAt)}</AlertTitle>
+          <p>
+            We found nothing we could cite reliably. That does not mean no projects exist.{" "}
+            <Link href="/request?type=buyer_assistance">Ask us to look</Link>.
+          </p>
+        </Alert>
+      ) : research?.state === "unavailable" ? (
+        <Alert role="status">
+          <AlertTitle>We can’t start new research right now</AlertTitle>
+          <p>
+            Please try again later, or <Link href="/request?type=buyer_assistance">ask us to look</Link>.
+          </p>
+        </Alert>
+      ) : null}
 
       {notes?.length ? (
         <Alert tone="info" role="status">

@@ -9,10 +9,13 @@ import {
   type DiscoveryAdapter,
   type DiscoveryReport,
 } from "@/discovery";
-import type { DiscoveryQuery } from "@/discovery";
-import { minResearchedResults } from "../env";
+import type { DiscoveryQuery, RuntimeEnv } from "@/discovery";
+import { currentEnv, isRunnable, normaliseUrl } from "@/discovery";
+import { queryKey } from "@/discovery/research/query";
+import { minResearchedResults, researchCacheHours } from "../env";
 import { log } from "../log";
 import { getRepositories, type Repositories } from "../repositories";
+import { researchSourceFor } from "./research-jobs";
 
 export interface SearchQuery {
   localityId?: string;
@@ -71,6 +74,36 @@ export interface SearchDeps {
   minResearched?: number;
   /** Lane B adapters (default: discovery's own defaults). */
   adapters?: DiscoveryAdapter[];
+  /** Runtime env for the research-source gate (default: from NODE_ENV). */
+  env?: RuntimeEnv;
+}
+
+/**
+ * Earlier web research results stored in the DB (Lane B, unverified): the listings of the latest
+ * finished job for this exact query, plus stored research listings whose title/developer matches
+ * or that are in the filtered locality. Shown only while the research source is runnable here,
+ * so suspending the source also hides what it found.
+ */
+async function storedResearchListings(
+  repos: Repositories,
+  q: { text?: string; localityId?: string; limit: number },
+  env: RuntimeEnv,
+): Promise<ExternalListing[]> {
+  if (!q.text && !q.localityId) return [];
+  const source = researchSourceFor(repos.backend);
+  if (!isRunnable(source, env)) return [];
+  const key = q.text ? queryKey(q.text, q.localityId) : "";
+  const [forQuery, matching] = await Promise.all([
+    key ? repos.researchJobs.listingsForQuery(key, researchCacheHours()) : Promise.resolve([]),
+    repos.externalListings.search({ sourceIds: [source.id], text: q.text, localityId: q.localityId, limit: q.limit }),
+  ]);
+  const byId = new Map<string, ExternalListing>();
+  for (const l of [...forQuery, ...matching]) {
+    if (l.lane !== "external" || l.sourceId !== source.id) continue;
+    if (q.localityId && l.localityId !== q.localityId) continue;
+    if (!byId.has(l.id)) byId.set(l.id, l);
+  }
+  return [...byId.values()];
 }
 
 /**
@@ -137,18 +170,41 @@ export async function searchProperties(raw: SearchQuery = {}, deps: SearchDeps =
     return done({ researched, external: [], externalQueried: true, externalErrors: ["External listings are unavailable right now."], matchedProjects: {} });
   }
 
+  let stored: ExternalListing[] = [];
+  try {
+    stored = await storedResearchListings(repos, { text, localityId: q.localityId, limit }, deps.env ?? currentEnv());
+  } catch (e) {
+    log.warn("search.stored_research_failed", { reason: e instanceof Error ? e.name : "unknown" });
+  }
+
   const researchedIds = new Set(researched.map((p) => p.id)); // only these are hidden as duplicates
-  const external = report.listings
+  const seenUrls = new Set(report.listings.map((l) => normaliseUrl(l.canonicalUrl)));
+  const seenIds = new Set(report.listings.map((l) => l.id));
+  const storedNew = stored.filter((l) => !seenIds.has(l.id) && !seenUrls.has(normaliseUrl(l.canonicalUrl)));
+  const storedIds = new Set(storedNew.map((l) => l.id));
+  const external = [...report.listings, ...storedNew]
     .filter((l) => l.lane === "external")
     .filter((l) => !(l.matchedProjectId && researchedIds.has(l.matchedProjectId)))
     .slice(0, limit);
 
-  // Persist what we showed so leads can reference a listing id (best effort).
-  if (external.length) {
+  // Persist what we showed so leads can reference a listing id (best effort). Stored research
+  // listings are already in the DB and are not rewritten.
+  const toPersist = external.filter((l) => !storedIds.has(l.id));
+  if (toPersist.length) {
     try {
-      await repos.externalListings.upsertMany(external);
+      await repos.externalListings.upsertMany(toPersist);
     } catch (e) {
       log.warn("search.external_upsert_failed", { reason: e instanceof Error ? e.name : "unknown" });
+    }
+  }
+
+  // Stored listings were matched (by RERA only) when researched; resolve those projects for the hint.
+  const missing = [...new Set(external.map((l) => l.matchedProjectId).filter((id): id is string => !!id && !projectById.has(id)))];
+  if (missing.length) {
+    try {
+      for (const p of await repos.projects.getProjectsByIds(missing)) if (p.published === true) projectById.set(p.id, p);
+    } catch (e) {
+      log.warn("search.matched_projects_failed", { reason: e instanceof Error ? e.name : "unknown" });
     }
   }
 

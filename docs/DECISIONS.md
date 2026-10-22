@@ -97,3 +97,11 @@ No legal or regulatory facts are asserted in these docs; any statement about RER
 - **Decision:** Run the Next.js app on Cloud Run (`asia-south1`) from a standalone-output container; keep Postgres, Auth and Storage on Supabase (`ap-south-1`). Infra as code in `infra/terraform`; deploys from GitHub Actions via Workload Identity Federation (no keys); secrets in Secret Manager. Custom domains go through a global HTTPS load balancer with Cloud Armor (Cloud Run domain mappings are not offered in `asia-south1`).
 - **Rejected for now:** Cloud SQL + Identity Platform + Cloud Storage, which would rewrite RLS, staff auth and storage before M2. Revisit if data must sit inside GCP.
 - Details: `DEPLOYMENT.md`.
+
+## D16 — Research sources for on-demand research — owner decision (2026-10-22)
+- **Context:** The owner requires no sample data in production: a research agent researches a search miss, stores results in the DB, and later searches read from the DB.
+- **Decision (owner chose "Web search + developer + K-RERA"):**
+  - `anthropic-web-search` is **approved** (access method `api`). It covers Anthropic server-side web search with citations, and the public developer pages it surfaces. Only short factual fields that appear verbatim in the cited text are stored, with the cited URL, as Lane B unverified records.
+  - **K-RERA automated reading is not enabled.** On 2026-10-22 an automated fetch of `rera.karnataka.gov.in/robots.txt` was refused as robots-disallowed, and no terms page permitting automated access was found. Per DATA_SOURCE_POLICY §4 we do not crawl it. K-RERA stays manual staff lookup plus link-out. A RERA number may still be stored when it appears verbatim in a web-search citation.
+  - Revisit if the K-RERA authority publishes an API or grants permission.
+- **Consequences:** The research worker never publishes or verifies. Staff review is still required before anything becomes a researched (Lane A) project.

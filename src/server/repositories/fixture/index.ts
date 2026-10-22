@@ -6,6 +6,7 @@ import { FixtureLeadRepository } from "./leads";
 import { FixtureProjectRepository } from "./projects";
 import { FixtureResearchRepository } from "./research";
 import { SAMPLE_PROJECTS } from "./sample-projects";
+import { FixtureDocumentStorage } from "../../storage/documents";
 
 export { FixtureProjectRepository, FixtureExternalListingRepository, FixtureLeadRepository, FixtureResearchRepository };
 export { SAMPLE_PROJECTS };
@@ -19,5 +20,6 @@ export function createFixtureRepositories(): Repositories {
     research: new FixtureResearchRepository(store),
     externalListings: new FixtureExternalListingRepository(),
     leads: new FixtureLeadRepository(),
+    documentStorage: new FixtureDocumentStorage(),
   };
 }

@@ -71,3 +71,20 @@ describe("domain helpers", () => {
     expect(bhkMatches("12 BHK", "1")).toBe(false);
   });
 });
+
+describe("login throttle (L2)", async () => {
+  const { allowLoginAttempt, LOGIN_MAX_ATTEMPTS } = await import("./services/login-throttle");
+  const { FixedWindowRateLimiter } = await import("./services/rate-limit");
+  it("blocks after LOGIN_MAX_ATTEMPTS per IP and per email, then resets after the window", () => {
+    const l = new FixedWindowRateLimiter(LOGIN_MAX_ATTEMPTS, 1000);
+    for (let i = 0; i < LOGIN_MAX_ATTEMPTS; i++) expect(allowLoginAttempt({ ipKey: "1.2.3.4", now: 0 }, l)).toBe(true);
+    expect(allowLoginAttempt({ ipKey: "1.2.3.4", now: 0 }, l)).toBe(false);
+    expect(allowLoginAttempt({ ipKey: "5.6.7.8", now: 0 }, l)).toBe(true);
+    expect(allowLoginAttempt({ ipKey: "1.2.3.4", now: 1001 }, l)).toBe(true);
+    // same email from many IPs is also bounded (case-insensitive)
+    const m = new FixedWindowRateLimiter(2, 1000);
+    expect(allowLoginAttempt({ ipKey: "a", email: "Staff@Example.com", now: 0 }, m)).toBe(true);
+    expect(allowLoginAttempt({ ipKey: "b", email: "staff@example.com", now: 0 }, m)).toBe(true);
+    expect(allowLoginAttempt({ ipKey: "c", email: "staff@example.com ", now: 0 }, m)).toBe(false);
+  });
+});

@@ -2,16 +2,18 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Developer, FactAuditEvent, FactValue, Project, ResearchFactField, VerificationState } from "@/domain/types";
 import { getLocality, isActiveLocality } from "@/config/markets";
-import { computeCompleteness } from "@/research/publish";
 import { factVersion } from "@/research/verification";
 import {
   CONFLICT_MESSAGE,
+  type AddDocumentResult,
   type AuditActor,
+  type NewDocumentRecord,
   type NewProjectInput,
   type PublishWriteResult,
   type ResearchRepository,
   type ResearchWriteResult,
   type StaffAuditEntry,
+  type StoredDocument,
 } from "../types";
 import { slugify, uniqueSlug } from "../slug";
 import { mapProjectRow, PROJECT_SELECT, toFact, type FactRow, type ProjectRow } from "./mappers";
@@ -44,7 +46,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /**
  * SERVICE-ROLE staff write model (bypasses RLS: sees unpublished projects). Server-only; callers
  * enforce staff roles. Every write is ONE SQL transaction via the research_* functions in
- * 0002_research_audit.sql (change + audit + auto-unpublish, readiness re-checked under a row lock).
+ * 0002_research_audit.sql / 0003_m2_live.sql (change + audit + auto-unpublish, readiness re-checked under a row lock).
  * Not exercised against a live Supabase yet (no credentials); the SQL is covered by `npm run test:db`.
  */
 export class SupabaseResearchRepository implements ResearchRepository {
@@ -105,10 +107,7 @@ export class SupabaseResearchRepository implements ResearchRepository {
   }
 
   async setFact(projectId: string, field: ResearchFactField, fact: FactValue<unknown>, actor: AuditActor): Promise<ResearchWriteResult> {
-    const current = await this.getProjectByIdForStaff(projectId);
-    if (!current) return NOT_FOUND;
-    // Completeness also counts units, which only the app maps; computed from the post-edit state.
-    const completeness = computeCompleteness({ ...current, [field]: fact } as Project);
+    // Completeness is recomputed inside the RPC from the committed state (R2, tn_compute_completeness).
     const r = await this.rpc("research_set_fact", {
       p_project_id: projectId,
       p_field: DB_FACT_FIELD[field],
@@ -116,7 +115,6 @@ export class SupabaseResearchRepository implements ResearchRepository {
       p_value: fact.status === "known" ? fact.value : null,
       p_verification: fact.verification,
       p_sources: fact.sources,
-      p_completeness: completeness,
       p_actor_id: actor.actorId,
       p_actor_role: actor.actorRole,
     });
@@ -132,6 +130,7 @@ export class SupabaseResearchRepository implements ResearchRepository {
     expectedVersion: string,
     actor: AuditActor,
     note: string | null,
+    expectedFrom?: VerificationState,
   ): Promise<ResearchWriteResult> {
     const { data, error } = await this.db()
       .from("facts")
@@ -145,11 +144,16 @@ export class SupabaseResearchRepository implements ResearchRepository {
     if (!data) return { ok: false, error: "conflict", message: CONFLICT_MESSAGE };
     const row = data as FactRow;
     if (factVersion(toFact(row)) !== expectedVersion) return { ok: false, error: "conflict", message: CONFLICT_MESSAGE };
-    // The RPC re-checks that this exact fact row is still current (row lock) → 'conflict' if not.
+    if (expectedFrom !== undefined && row.verification !== expectedFrom) {
+      return { ok: false, error: "conflict", message: CONFLICT_MESSAGE };
+    }
+    // R1: the RPC re-checks, under the row lock, that this exact fact row is still current AND
+    // its verification is still the one read here → 'conflict' if either changed meanwhile.
     const r = await this.rpc("research_set_verification", {
       p_project_id: projectId,
       p_field: DB_FACT_FIELD[field],
       p_fact_id: row.id,
+      p_expected_from: row.verification,
       p_to: to,
       p_actor_id: actor.actorId,
       p_actor_role: actor.actorRole,
@@ -207,5 +211,76 @@ export class SupabaseResearchRepository implements ResearchRepository {
       note: r.note,
       actorName: names.get(r.actor_id) ?? r.actor_id,
     }));
+  }
+
+  async nextDocumentVersion(projectId: string, documentKey: string): Promise<number> {
+    const { data, error } = await this.db()
+      .from("project_documents")
+      .select("version")
+      .eq("project_id", projectId)
+      .eq("document_key", documentKey)
+      .order("version", { ascending: false })
+      .limit(1);
+    if (error) throw new Error(`document version lookup failed (${error.code ?? "unknown"})`);
+    const top = (data as { version: number }[])[0];
+    return top ? top.version + 1 : 1;
+  }
+
+  async addDocument(record: NewDocumentRecord, actor: AuditActor): Promise<AddDocumentResult> {
+    // research_add_document (0003_m2_live.sql): project lock + version check + row + audit, one transaction.
+    const { data, error } = await this.db().rpc("research_add_document", {
+      p_project_id: record.projectId,
+      p_document_key: record.documentKey,
+      p_title: record.title,
+      p_kind: record.kind,
+      p_document_date: record.documentDate,
+      p_source_id: record.sourceId,
+      p_source_url: record.sourceUrl,
+      p_storage_path: record.storagePath,
+      p_content_type: record.contentType,
+      p_size_bytes: record.sizeBytes,
+      p_sha256: record.sha256,
+      p_version: record.version,
+      p_actor_id: actor.actorId,
+      p_actor_role: actor.actorRole,
+    });
+    if (error) throw new Error(`research_add_document failed (${error.code ?? "unknown"})`);
+    const r = data as { status: "ok" | "not_found" | "conflict"; id?: string };
+    if (r.status === "not_found") return NOT_FOUND;
+    if (r.status === "conflict") {
+      return { ok: false, error: "conflict", message: "Another upload of this document finished first — reload and try again." };
+    }
+    const doc = await this.getDocumentForStaff(r.id!);
+    if (!doc) throw new Error("addDocument: inserted row not readable");
+    return { ok: true, document: doc };
+  }
+
+  async getDocumentForStaff(documentId: string): Promise<StoredDocument | null> {
+    const { data, error } = await this.db()
+      .from("project_documents")
+      .select("id, project_id, document_key, title, kind, version, document_date, source_id, source_url, observed_at, storage_path, content_type, size_bytes, sha256")
+      .eq("id", documentId)
+      .maybeSingle();
+    if (error) throw new Error(`document lookup failed (${error.code ?? "unknown"})`);
+    if (!data) return null;
+    const d = data as {
+      id: string; project_id: string; document_key: string; title: string; kind: StoredDocument["kind"]; version: number;
+      document_date: string | null; source_id: string; source_url: string | null; observed_at: string; storage_path: string | null;
+      content_type: StoredDocument["contentType"]; size_bytes: number | string | null; sha256: string | null;
+    };
+    return {
+      id: d.id,
+      title: d.title,
+      kind: d.kind,
+      version: d.version,
+      documentDate: d.document_date,
+      source: { sourceId: d.source_id, url: d.source_url, observedAt: d.observed_at, documentDate: d.document_date },
+      projectId: d.project_id,
+      documentKey: d.document_key,
+      storagePath: d.storage_path,
+      contentType: d.content_type,
+      sizeBytes: d.size_bytes === null ? null : Number(d.size_bytes),
+      sha256: d.sha256,
+    };
   }
 }

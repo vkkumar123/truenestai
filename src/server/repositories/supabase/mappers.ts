@@ -266,6 +266,8 @@ export interface LeadRow {
   attribution: StoredLead["attribution"] | null;
   created_at: string;
   retention_until: string;
+  /** Read-only here: set via the lead_assign RPC, never on insert. */
+  assigned_to?: string | null;
 }
 
 export function mapLeadRow(r: LeadRow): StoredLead {
@@ -290,6 +292,7 @@ export function mapLeadRow(r: LeadRow): StoredLead {
     createdAt: r.created_at,
     retentionUntil: r.retention_until,
     consentedAt: r.consented_at,
+    assignedTo: r.assigned_to ?? null,
     qualification:
       r.qualification_score !== null && r.qualification_tier !== null
         ? { score: r.qualification_score, tier: r.qualification_tier, reasons: r.qualification_reasons ?? [] }

@@ -15,6 +15,8 @@ const d = conn.client ? describe : describe.skip;
 const STAFF_UID = "11111111-1111-4111-8111-111111111111";
 const OTHER_UID = "22222222-2222-4222-8222-222222222222";
 const LEAD_ID = "33333333-3333-4333-8333-333333333333";
+const LEAD2_ID = "66666666-6666-4666-8666-666666666666";
+const ADMIN_UID = "77777777-7777-4777-8777-777777777777";
 const CONSENT_VERSION = "2026-10-21.v1";
 
 async function seed(c: Client) {
@@ -48,15 +50,16 @@ async function seed(c: Client) {
       ('p-pub', 'complaint', 'sample-feed', 'https://example.com/s', now(), 0),
       ('p-hidden', 'complaint', 'sample-feed', 'https://example.com/s2', now(), 1);
     insert into project_documents (project_id, document_key, title, kind, source_id, observed_at, storage_path) values
-      ('p-pub', 'brochure', 'SAMPLE brochure', 'brochure', 'sample-feed', now(), 'private/x.pdf');
+      ('p-pub', 'brochure', 'SAMPLE brochure', 'brochure', 'sample-feed', now(), 'p-pub/brochure/v1/sample-brochure.pdf');
     insert into external_listings (id, source_id, source_record_id, canonical_url, title, limitations, is_sample) values
       ('sample-feed:X1', 'sample-feed', 'X1', 'https://example.com/x1', 'SAMPLE X1', '{"Not verified by TrueNest"}', true);
     insert into infrastructure_items (id, name, category, stage, declared_completion, published, is_sample) values
       ('i-pub', 'SAMPLE Metro', 'metro', 'proposed', '{"status":"unknown","value":null}', true, true),
       ('i-draft', 'SAMPLE Draft Road', 'road', 'proposed', '{"status":"unknown","value":null}', false, true);
-    insert into staff_profiles (user_id, role) values ('${STAFF_UID}', 'advisor');
-    insert into leads (id, request_type, name, email, preferred_channel, contact_consent, consent_text_version)
-      values ('${LEAD_ID}', 'verification', 'SAMPLE Buyer', 'buyer@example.com', 'email', true, '${CONSENT_VERSION}');
+    insert into staff_profiles (user_id, role) values ('${STAFF_UID}', 'advisor'), ('${ADMIN_UID}', 'admin');
+    insert into leads (id, request_type, name, email, preferred_channel, contact_consent, consent_text_version, assigned_to)
+      values ('${LEAD_ID}', 'verification', 'SAMPLE Buyer', 'buyer@example.com', 'email', true, '${CONSENT_VERSION}', '${STAFF_UID}'),
+             ('${LEAD2_ID}', 'verification', 'SAMPLE Other Buyer', 'other@example.com', 'email', true, '${CONSENT_VERSION}', null);
   `);
 }
 
@@ -182,6 +185,24 @@ d("migrations + RLS", () => {
   });
 
   describe("authenticated", () => {
+    it("advisors see and update only leads assigned to them; admins see all", async () => {
+      const advisor = await asRole(c, "authenticated", STAFF_UID, async (q) => ({
+        ids: (await q.query("select id from leads")).rows.map((x) => x.id),
+        updOther: (await q.query("update leads set status = 'contacted' where id = $1", [LEAD2_ID])).rowCount,
+        events: (await q.query("select distinct lead_id from lead_events")).rows.map((x) => x.lead_id),
+      }));
+      expect(advisor).toEqual({ ids: [LEAD_ID], updOther: 0, events: [LEAD_ID] });
+      const evErr = await errorAs(c, "authenticated", STAFF_UID,
+        "insert into lead_events (lead_id, actor_id, event_type) values ($1, $2, 'status_changed')", [LEAD2_ID, STAFF_UID]);
+      expect(evErr?.message).toMatch(/row-level security/);
+      const admin = await asRole(c, "authenticated", ADMIN_UID, async (q) =>
+        (await q.query("select id from leads order by id")).rows.map((x) => x.id));
+      expect(admin).toEqual([LEAD_ID, LEAD2_ID].sort());
+      // assignment is not client-writable (service role after an admin check)
+      const assign = await errorAs(c, "authenticated", ADMIN_UID, "update leads set assigned_to = $1 where id = $2", [ADMIN_UID, LEAD2_ID]);
+      expect(assign?.code).toBe("42501");
+    });
+
     it("staff can read and update leads", async () => {
       const r = await asRole(c, "authenticated", STAFF_UID, async (q) => {
         const before = (await q.query("select id, status from leads")).rows;
@@ -235,13 +256,71 @@ d("migrations + RLS", () => {
     });
   });
 
+  describe("M2 (0003)", () => {
+    it("L9: is_published_project is not callable through the exposed public schema; policies still work", async () => {
+      const pub = await c.query("select to_regprocedure('public.is_published_project(text)') as f");
+      expect(pub.rows[0].f).toBeNull();
+      expect((await errorAs(c, "anon", null, "select private.is_staff_admin()"))?.code).toBe("42501");
+      const rows = await asRole(c, "anon", null, async (q) => (await q.query("select project_id from project_units")).rows);
+      expect(new Set(rows.map((x) => x.project_id))).toEqual(new Set(["p-pub"]));
+    });
+
+    it("lead_assign assigns atomically with an audit event; validates assignee; service role only", async () => {
+      const call = (assignee: string | null) =>
+        [`select public.lead_assign($1, $2, $3) as r`, [LEAD2_ID, assignee, ADMIN_UID]] as const;
+      expect((await errorAs(c, "authenticated", ADMIN_UID, call(STAFF_UID)[0], [...call(STAFF_UID)[1]]))?.code).toBe("42501");
+      const r = await asRole(c, "service_role", null, async (q) => {
+        const bad = (await q.query(call(OTHER_UID)[0], [...call(OTHER_UID)[1]])).rows[0].r.status;
+        const ok = (await q.query(call(STAFF_UID)[0], [...call(STAFF_UID)[1]])).rows[0].r.status;
+        const same = (await q.query(call(STAFF_UID)[0], [...call(STAFF_UID)[1]])).rows[0].r.status;
+        const ev = (await q.query("select actor_id, assigned_to from lead_events where event_type = 'assigned'")).rows;
+        await q.query("set local role authenticated");
+        await q.query("select set_config('request.jwt.claim.sub', $1, true)", [STAFF_UID]);
+        const visible = (await q.query("select id from leads order by id")).rows.map((x) => x.id);
+        return { bad, ok, same, ev, visible };
+      });
+      expect(r).toEqual({
+        bad: "unknown_assignee", ok: "ok", same: "unchanged",
+        ev: [{ actor_id: ADMIN_UID, assigned_to: STAFF_UID }],
+        visible: [LEAD_ID, LEAD2_ID].sort(),
+      });
+    });
+
+    it("creates the private project-documents bucket (pdf/png/jpeg, 15 MB)", async () => {
+      const { rows } = await c.query("select public, file_size_limit, allowed_mime_types from storage.buckets where id = 'project-documents'");
+      expect(rows).toEqual([{ public: false, file_size_limit: "15728640", allowed_mime_types: ["application/pdf", "image/png", "image/jpeg"] }]);
+    });
+
+    it("project_documents enforces content type, size, sha256 and versioned path format", async () => {
+      const base = "insert into project_documents (project_id, document_key, title, kind, source_id, observed_at, storage_path, content_type, size_bytes) values ('p-pub', 'k', 't', 'other', 'sample-feed', now(), $1, $2, $3)";
+      expect((await errorAs(c, "service_role", null, base, ["p-pub/k/v1/a.pdf", "text/html", 10]))?.code).toBe("23514");
+      expect((await errorAs(c, "service_role", null, base, ["p-pub/k/v1/a.pdf", "application/pdf", 15728641]))?.code).toBe("23514");
+      expect((await errorAs(c, "service_role", null, base, ["../etc/passwd", "application/pdf", 10]))?.code).toBe("23514");
+      expect(await errorAs(c, "service_role", null, base, ["p-pub/k/v1/a.pdf", "application/pdf", 10])).toBeNull();
+    });
+
+    it("research_add_document allocates versions and audits; service role only", async () => {
+      const call = (v: number) => `select public.research_add_document('p-pub', 'site-plan', 'SAMPLE plan', 'other', null, 'sample-feed', null,
+        'p-pub/site-plan/v${v}/plan.pdf', 'application/pdf', 100, null, ${v}, 'u', 'admin') as r`;
+      expect((await errorAs(c, "authenticated", ADMIN_UID, call(1)))?.code).toBe("42501");
+      const r = await asRole(c, "service_role", null, async (q) => ({
+        v1: (await q.query(call(1))).rows[0].r.status,
+        dup: (await q.query(call(1))).rows[0].r,
+        v2: (await q.query(call(2))).rows[0].r.status,
+        audit: (await q.query("select field || ':' || action || ':' || note as note from fact_review_events where project_id = 'p-pub' order by note")).rows.map((x) => x.note),
+      }));
+      expect(r).toEqual({ v1: "ok", dup: { status: "conflict", next_version: 2 }, v2: "ok",
+        audit: ["documents:document_uploaded:document uploaded: site-plan v1 (other)", "documents:document_uploaded:document uploaded: site-plan v2 (other)"] });
+    });
+  });
+
   describe("service_role", () => {
     it("bypasses RLS for server-side workers", async () => {
       const r = await asRole(c, "service_role", null, async (q) => ({
         projects: (await q.query("select count(*)::int as n from projects")).rows[0].n,
         leads: (await q.query("select count(*)::int as n from leads")).rows[0].n,
       }));
-      expect(r).toEqual({ projects: 2, leads: 1 });
+      expect(r).toEqual({ projects: 2, leads: 2 });
     });
   });
 
@@ -264,7 +343,7 @@ d("migrations + RLS", () => {
         await q.query(sql, [...params]);
         return (await q.query("select count(*)::int as n from lead_events where event_type = 'created'")).rows[0].n;
       });
-      expect(r).toBe(2);
+      expect(r).toBe(3);
     });
 
     it("rejects non-https source URLs", async () => {

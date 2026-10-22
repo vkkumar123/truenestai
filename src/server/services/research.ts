@@ -217,6 +217,7 @@ const verificationSchema = z.object({
   field: z.enum(RESEARCH_FACT_FIELDS),
   to: z.enum(VERIFICATION_STATES),
   expectedVersion: z.string().trim().min(1, "expectedVersion required (reload the page)").max(100),
+  expectedFrom: z.enum(VERIFICATION_STATES).optional(),
   note: z.preprocess((v) => (typeof v === "string" && v.trim() === "" ? undefined : v), z.string().trim().max(1000).optional()),
 });
 
@@ -226,6 +227,8 @@ export interface ChangeVerificationInput {
   to: VerificationState | string;
   /** factVersion of the fact as the reviewer saw it (getStaffProjectView().factVersions[field]). */
   expectedVersion: string;
+  /** Verification state the reviewer saw; a different current state → "conflict" (R1). */
+  expectedFrom?: VerificationState | string;
   note?: string | null;
 }
 
@@ -241,7 +244,11 @@ export async function changeVerification(
   const { session, repos, actor } = await staffContext(deps);
   const refused = refuseAutomated(session);
   if (refused) return refused;
-  const parsed = verificationSchema.safeParse({ ...input, note: input?.note ?? undefined });
+  const parsed = verificationSchema.safeParse({
+    ...input,
+    expectedFrom: input?.expectedFrom || undefined,
+    note: input?.note ?? undefined,
+  });
   if (!parsed.success) return fail("validation", "Invalid verification change.", zodErrors(parsed.error));
   const v = parsed.data;
   const current = await repos.research.getProjectByIdForStaff(v.projectId);
@@ -256,8 +263,11 @@ export async function changeVerification(
     return fail(forbidden ? "forbidden" : "validation", check.reason);
   }
   if (factVersion(fact) !== v.expectedVersion) return fail("conflict", CONFLICT_MESSAGE);
+  if (v.expectedFrom !== undefined && fact.verification !== v.expectedFrom) return fail("conflict", CONFLICT_MESSAGE);
   // Authoritative version check + change + audit happen atomically in the repository.
-  const r = await repos.research.setFactVerification(v.projectId, v.field, v.to, v.expectedVersion, actor, v.note ?? null);
+  const r = await repos.research.setFactVerification(
+    v.projectId, v.field, v.to, v.expectedVersion, actor, v.note ?? null, v.expectedFrom ?? fact.verification,
+  );
   if (!r.ok) return fail(r.error, r.message);
   logWrite("research.verification_changed", r.project.id, session, { field: v.field, to: v.to, autoUnpublished: r.autoUnpublished });
   return { ok: true, project: r.project, autoUnpublished: r.autoUnpublished };

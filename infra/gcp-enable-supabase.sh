@@ -44,6 +44,10 @@ add_secret() {
   local name="truenest-${ENV_NAME}-$1" prompt="$2" v
   read -rsp "${prompt}: " v; echo
   [ -n "$v" ] || { echo "!! empty value"; exit 1; }
+  if [ "$1" = supabase-url ]; then
+    v="${v%/}"; v="${v%/rest/v1}"; v="${v%/}" # accept a pasted .../rest/v1/ and keep the base URL
+    [[ "$v" =~ ^https://[a-z0-9]+\.supabase\.co$ ]] || { echo "!! expected https://<ref>.supabase.co"; exit 1; }
+  fi
   printf %s "$v" | gcloud secrets versions add "${name}" --data-file=- >/dev/null
   echo "   saved ${name}"
 }

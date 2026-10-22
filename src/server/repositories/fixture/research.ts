@@ -7,17 +7,22 @@ import { factVersion } from "@/research/verification";
 import {
   AUTO_UNPUBLISH_NOTE,
   CONFLICT_MESSAGE,
+  type AddDocumentResult,
   type AuditActor,
+  type NewDocumentRecord,
   type NewProjectInput,
   type PublishWriteResult,
   type ResearchRepository,
   type ResearchWriteResult,
   type StaffAuditEntry,
+  type StoredDocument,
 } from "../types";
 import { slugify, uniqueSlug } from "../slug";
 
 const unknownFact = <T>(): FactValue<T> => ({ status: "unknown", value: null, verification: "unverified", sources: [] });
 const NOT_FOUND = { ok: false, error: "not_found", message: "Project not found." } as const;
+
+type DocMeta = Pick<StoredDocument, "projectId" | "documentKey" | "version" | "storagePath" | "contentType" | "sizeBytes" | "sha256">;
 
 type EventDraft = Omit<FactAuditEvent, "id" | "at" | "actorId" | "actorRole">;
 
@@ -29,6 +34,8 @@ type EventDraft = Omit<FactAuditEvent, "id" | "at" | "actorId" | "actorRole">;
  */
 export class FixtureResearchRepository implements ResearchRepository {
   private readonly audit: FactAuditEvent[] = [];
+  /** Staff-only document fields, by document id (Project.documents holds the public part). */
+  private readonly documentMeta = new Map<string, DocMeta>();
 
   constructor(private readonly store: Project[]) {}
 
@@ -136,12 +143,16 @@ export class FixtureResearchRepository implements ResearchRepository {
     expectedVersion: string,
     actor: AuditActor,
     note: string | null,
+    expectedFrom?: VerificationState,
   ): Promise<ResearchWriteResult> {
     const i = this.index(projectId);
     if (i < 0) return NOT_FOUND;
     const current = this.store[i];
     const fact = current[field] as FactValue<unknown>;
     if (factVersion(fact) !== expectedVersion) return { ok: false, error: "conflict", message: CONFLICT_MESSAGE };
+    if (expectedFrom !== undefined && fact.verification !== expectedFrom) {
+      return { ok: false, error: "conflict", message: CONFLICT_MESSAGE };
+    }
     const changed = { ...current, [field]: { ...fact, verification: to } } as Project;
     const events: EventDraft[] = [
       { projectId, field, action: "verification_changed", fromVerification: fact.verification, toVerification: to, note },
@@ -168,5 +179,61 @@ export class FixtureResearchRepository implements ResearchRepository {
   async listAudit(projectId: string): Promise<StaffAuditEntry[]> {
     // Fixture mode has no staff_profiles: the display name is the actor id.
     return this.audit.filter((e) => e.projectId === projectId).map((e) => ({ ...structuredClone(e), actorName: e.actorId }));
+  }
+
+  async nextDocumentVersion(projectId: string, documentKey: string): Promise<number> {
+    return this.computeNextVersion(projectId, documentKey);
+  }
+
+  private computeNextVersion(projectId: string, documentKey: string): number {
+    const versions = [...this.documentMeta.values()]
+      .filter((m) => m.projectId === projectId && m.documentKey === documentKey)
+      .map((m) => m.version);
+    return versions.length ? Math.max(...versions) + 1 : 1;
+  }
+
+  async addDocument(record: NewDocumentRecord, actor: AuditActor): Promise<AddDocumentResult> {
+    const i = this.index(record.projectId);
+    if (i < 0) return NOT_FOUND;
+    if (this.computeNextVersion(record.projectId, record.documentKey) !== record.version) {
+      return { ok: false, error: "conflict", message: "Another upload of this document finished first — reload and try again." };
+    }
+    const current = this.store[i];
+    const doc = {
+      id: randomUUID(),
+      title: record.title,
+      kind: record.kind,
+      version: record.version,
+      documentDate: record.documentDate,
+      source: { sourceId: record.sourceId, url: record.sourceUrl, observedAt: new Date().toISOString(), documentDate: record.documentDate },
+    };
+    const meta: DocMeta = {
+      projectId: record.projectId,
+      documentKey: record.documentKey,
+      version: record.version,
+      storagePath: record.storagePath,
+      contentType: record.contentType,
+      sizeBytes: record.sizeBytes,
+      sha256: record.sha256,
+    };
+    this.commit(i, { ...current, documents: [...current.documents, doc] }, [
+      {
+        projectId: record.projectId, field: "documents", action: "document_uploaded", fromVerification: null, toVerification: null,
+        note: `document uploaded: ${record.documentKey} v${record.version} (${record.kind})`,
+      },
+    ], actor);
+    this.documentMeta.set(doc.id, meta);
+    return { ok: true, document: { ...structuredClone(doc), ...meta } };
+  }
+
+  async getDocumentForStaff(documentId: string): Promise<StoredDocument | null> {
+    const meta = this.documentMeta.get(documentId);
+    if (!meta) return null;
+    const doc = this.store.find((p) => p.id === meta.projectId)?.documents.find((d) => d.id === documentId);
+    return doc ? { ...structuredClone(doc), ...meta } : null;
+  }
+
+  async documentExistsAtPath(storagePath: string): Promise<boolean> {
+    return [...this.documentMeta.values()].some((m) => m.storagePath === storagePath);
   }
 }

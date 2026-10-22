@@ -11,7 +11,11 @@
     "test": "vitest run",
     "test:db": "vitest run --config vitest.db.config.mts",
     "test:e2e": "playwright test",
-    "check": "npm run typecheck && npm run lint && npm run test"
+    "check": "npm run typecheck && npm run lint && npm run test",
+    "db:migrate": "tsx --env-file-if-exists=.env.local --conditions=react-server scripts/db-migrate.ts",
+    "db:seed": "tsx --env-file-if-exists=.env.local --conditions=react-server scripts/db-migrate.ts --seed",
+    "db:seed:generate": "tsx --conditions=react-server scripts/generate-seed.ts",
+    "staff:create": "tsx --env-file-if-exists=.env.local --conditions=react-server scripts/create-staff.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.7",

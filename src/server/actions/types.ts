@@ -17,12 +17,31 @@ export type UpdateLeadStatusState =
   | { status: "success"; leadId: string; leadStatus: string; message: string }
   | { status: "error"; message: string; unauthenticated?: boolean };
 
+export type AssignLeadState =
+  | { status: "idle" }
+  | { status: "success"; leadId: string; assignedTo: string | null; message: string }
+  | { status: "error"; message: string; unauthenticated?: boolean };
+
 export type ResearchActionState =
   | { status: "idle" }
-  | { status: "success"; message: string; projectId: string; slug: string; autoUnpublished?: boolean }
+  | {
+      status: "success";
+      /** What the action did (never includes the auto-unpublish notice). */
+      message: string;
+      projectId: string;
+      slug: string;
+      /** D13: true when this edit made a published project fail readiness and it was unpublished. */
+      autoUnpublished: boolean;
+      /** Present only when autoUnpublished: the notice to show (AUTO_UNPUBLISHED_MESSAGE). */
+      autoUnpublishedMessage?: string;
+    }
   | {
       status: "error";
       error: "validation" | "forbidden" | "not_found" | "not_ready" | "conflict" | "unauthenticated" | "unavailable";
       message: string;
       errors?: string[];
     };
+
+/** Shown alongside a successful research action that auto-unpublished the project (D13). */
+export const AUTO_UNPUBLISHED_MESSAGE =
+  "The project no longer passes publish checks and was unpublished until an admin re-verifies it.";

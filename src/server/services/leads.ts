@@ -6,10 +6,10 @@ import { getSource } from "@/discovery";
 import { parseLeadInput } from "@/leads/validation";
 import { qualifyLead } from "@/leads/qualification";
 import { computeRetentionUntil, redactLeadForLog } from "@/leads/retention";
-import { requireStaff, type StaffSession } from "../auth";
+import { requireStaff, StaffAuthError, type StaffSession } from "../auth";
 import { leadRateLimit } from "../env";
 import { log } from "../log";
-import { getRepositories, type LeadFilter, type Repositories, type StoredLead } from "../repositories";
+import { getRepositories, type LeadFilter, type Repositories, type StaffMember, type StoredLead } from "../repositories";
 import { FixedWindowRateLimiter } from "./rate-limit";
 
 export interface SubmitLeadContext {
@@ -163,25 +163,60 @@ const leadStatusSchema = z.enum(["new", "contacted", "qualified", "closed", "wit
 const listFilterSchema = z.object({
   status: leadStatusSchema.optional(),
   requestType: z.enum(["verification", "buyer_assistance"]).optional(),
+  assignedTo: z.string().min(1).max(100).optional(),
   limit: z.coerce.number().int().min(1).max(200).optional(),
 });
 
-/** Staff only (throws StaffAuthError). Newest first, each with a subject summary. */
-export async function listLeads(filter: LeadFilter = {}, deps: LeadServiceDeps = {}): Promise<StaffLeadView[]> {
-  await (deps.requireStaff ?? requireStaff)();
-  const f = listFilterSchema.parse(filter);
-  const repos = deps.repos ?? getRepositories();
-  return withSubjects(await repos.leads.list(f), repos);
+/** Admins see every lead; advisors only leads assigned to them (mirrors the leads RLS policy). */
+function canSeeLead(session: StaffSession, lead: StoredLead): boolean {
+  return session.role === "admin" || (lead.assignedTo ?? null) === session.userId;
 }
 
-/** Staff only (throws StaffAuthError). */
+/**
+ * Staff only (throws StaffAuthError). Newest first, each with a subject summary. Advisors get
+ * only leads assigned to them (any `assignedTo` they pass is overridden); admins may filter.
+ */
+export async function listLeads(filter: LeadFilter = {}, deps: LeadServiceDeps = {}): Promise<StaffLeadView[]> {
+  const session = await (deps.requireStaff ?? requireStaff)();
+  const f = listFilterSchema.parse(filter);
+  const scoped: LeadFilter = session.role === "admin" ? f : { ...f, assignedTo: session.userId };
+  const repos = deps.repos ?? getRepositories();
+  return withSubjects(await repos.leads.list(scoped), repos);
+}
+
+/** Staff only (throws StaffAuthError). Advisors get null for leads not assigned to them. */
 export async function getLead(id: string, deps: LeadServiceDeps = {}): Promise<StaffLeadView | null> {
-  await (deps.requireStaff ?? requireStaff)();
+  const session = await (deps.requireStaff ?? requireStaff)();
   const parsed = z.string().min(1).max(100).safeParse(id);
   if (!parsed.success) return null;
   const repos = deps.repos ?? getRepositories();
   const lead = await repos.leads.getById(parsed.data);
-  return lead ? (await withSubjects([lead], repos))[0] : null;
+  return lead && canSeeLead(session, lead) ? (await withSubjects([lead], repos))[0] : null;
+}
+
+/** Admin only (throws StaffAuthError "forbidden" for advisors). Members leads can be assigned to. */
+export async function listAssignableStaff(deps: LeadServiceDeps = {}): Promise<StaffMember[]> {
+  const session = await (deps.requireStaff ?? requireStaff)();
+  if (session.role !== "admin") throw new StaffAuthError("forbidden", "Only an admin can view the staff list.");
+  return (deps.repos ?? getRepositories()).leads.listStaff();
+}
+
+export type AssignLeadServiceResult =
+  | { ok: true; lead: StoredLead; changed: boolean }
+  | { ok: false; error: "validation" | "not_found" | "forbidden"; message: string };
+
+/** Admin only. Assigns a lead to a staff member, or unassigns it with null. Audited ('assigned'). */
+export async function assignLead(id: string, assigneeId: string | null, deps: LeadServiceDeps = {}): Promise<AssignLeadServiceResult> {
+  const session = await (deps.requireStaff ?? requireStaff)();
+  if (session.role !== "admin") return { ok: false, error: "forbidden", message: "Only an admin can assign leads." };
+  const parsed = z
+    .object({ id: z.string().min(1).max(100), assigneeId: z.string().min(1).max(100).nullable() })
+    .safeParse({ id, assigneeId });
+  if (!parsed.success) return { ok: false, error: "validation", message: "Invalid lead or staff member." };
+  const repos = deps.repos ?? getRepositories();
+  const r = await repos.leads.assign(parsed.data.id, parsed.data.assigneeId, session.userId);
+  if (r.ok && r.changed) log.info("lead.assigned", { leadId: r.lead.id, assigned: parsed.data.assigneeId !== null, actor: session.userId });
+  return r;
 }
 
 export type UpdateLeadStatusServiceResult =
@@ -190,7 +225,8 @@ export type UpdateLeadStatusServiceResult =
 
 /**
  * Staff only (throws StaffAuthError). Enforces allowed transitions. Withdrawal (irreversible PII
- * erasure) requires the admin role. Lead assignment scoping is not implemented yet.
+ * erasure) requires the admin role. Advisors may change only leads assigned to them ("not_found"
+ * otherwise, so unassigned lead ids are not confirmed).
  */
 export async function updateLeadStatus(
   id: string,
@@ -204,6 +240,10 @@ export async function updateLeadStatus(
     return { ok: false, error: "forbidden", message: "Only an admin can withdraw a lead (this erases personal data)." };
   }
   const repos = deps.repos ?? getRepositories();
+  if (session.role !== "admin") {
+    const lead = await repos.leads.getById(parsed.data.id);
+    if (!lead || !canSeeLead(session, lead)) return { ok: false, error: "not_found", message: "Lead not found." };
+  }
   const result = await repos.leads.updateStatus(parsed.data.id, parsed.data.status, session.userId);
   if (result.ok) log.info("lead.status_changed", { ...redactLeadForLog(result.lead), actor: session.userId });
   return result;

@@ -251,6 +251,18 @@ describe("H1: never 'researching' when the worker cannot run", () => {
     expect(await svc.requestResearchOnMiss({ queryText: "zzq towers", clientKey: "1.1.1.1", userAgent: UA }, ok)).toMatchObject({ state: "researching" });
   });
 
+  it("a running job past its stale window (no worker to reclaim it) shows 'unavailable', not 'researching'", async () => {
+    let now = new Date("2026-10-22T00:00:00Z");
+    const repos = setup({ clock: () => now });
+    const deps = () => ({ repos, env: "test" as const, limiter: limiter(), processEnv: PE, now: now.getTime() });
+    await svc.requestResearchOnMiss({ queryText: "zzq orphan", clientKey: "1.1.1.1", userAgent: UA }, deps());
+    await repos.researchJobs.claim(1, 15);
+    now = new Date("2026-10-22T00:10:00Z");
+    expect(await svc.lookupResearchOnMiss({ queryText: "zzq orphan", userAgent: UA }, deps())).toMatchObject({ state: "researching" });
+    now = new Date("2026-10-22T00:18:00Z");
+    expect(await svc.lookupResearchOnMiss({ queryText: "zzq orphan", userAgent: UA }, deps())).toMatchObject({ state: "unavailable" });
+  });
+
   it("a queued job not picked up for 30 minutes is failed as 'stalled' and shows 'unavailable' (no re-enqueue for 6 h)", async () => {
     let now = new Date("2026-10-22T00:00:00Z");
     const repos = setup({ clock: () => now });

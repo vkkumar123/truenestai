@@ -72,3 +72,21 @@ Open (low):
 - N1: parallel login attempts all pass the check before failures are recorded; Supabase Auth has its own limits. Accepted for now.
 - N2: resolved — production marker step is in SUPABASE_SETUP §6 and `tests/db/migrate-seed.test.ts` covers seed.sql refusing a marked DB.
 - Live smoke test against the owner's Supabase is required before go-live.
+
+## M2.5 — review round 1 (2026-10-22)
+Input: 117ea5f (diff origin/main...HEAD); check 367, test:db 64, build, e2e 48. No live API call.
+Verdict: **CHANGES REQUIRED** (0 critical, 1 high, 4 medium, 6 low).
+- H1: missing key/secret or no scheduler left buyers on "researching" forever (queued jobs never expired).
+- M1: cross-attribution on multi-project pages. M2: substring matches let RERA fragments/price splices through. M3: paid research enqueued during GET render; no robots. M4: failed jobs not cached.
+- L1 model URL stored; L2 undocumented `allowed_callers`; L3 stale-running reclaim loop; L4 null requester hash silent; L5 doc drift; L6 /request lookup ungated.
+
+## M2.5 — review round 2 (2026-10-22)
+Input: d993519; check 387 (observed by orchestrator), test:db 65, build, e2e 50.
+Verdict: **PASS**. All round-1 findings verified fixed.
+Low, open/accepted:
+- L-a: spoofable UA; IP rotation can exhaust the 50/day cap (honest "unavailable"; no runaway spend). Later: Cloud Armor rule on POST /projects.
+- L-b: fixed by orchestrator — a running job past stale window + job deadline shows "unavailable".
+- L-c: 200-char citation window can admit a neighbouring card's price on dense pages; accepted (Lane B, unverified, sourced).
+- L-d: fixed — RESEARCH_WORKER.md no longer overstates no-JS support (Suspense streaming limitation predates M2.5).
+- L-e: real API search-result block shape untested; fails closed (`no_evidence`). Staging smoke call required before enabling the scheduler.
+- Deploy check: 0005 edited in place; confirmed not on origin/main and not applied by any database before merge.

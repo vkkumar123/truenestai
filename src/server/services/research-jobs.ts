@@ -158,8 +158,12 @@ export async function lookupResearchOnMiss(
     // Same precedence as research_enqueue: active → cached result → recent failure → can start.
     // A queued job not picked up for RESEARCH_STALL_MINUTES is not "researching": the next
     // enqueue marks it failed ('stalled').
-    if (jobs.some((j) => j.status === "running" || (j.status === "queued" && within(j.startedAt ?? j.requestedAt, RESEARCH_STALL_MINUTES * 60_000))))
+    // A running job past its stale window waits on a worker run to be reclaimed or abandoned;
+    // if no worker is running it would never change, so it is not shown as "researching".
+    const runningMs = RESEARCH_STALE_MINUTES * 60_000 + RESEARCH_JOB_TIMEOUT_MS;
+    if (jobs.some((j) => (j.status === "running" && within(j.startedAt ?? j.requestedAt, runningMs)) || (j.status === "queued" && within(j.startedAt ?? j.requestedAt, RESEARCH_STALL_MINUTES * 60_000))))
       return { state: "researching", queryText };
+    if (jobs.some((j) => j.status === "running")) return { state: "unavailable", queryText };
     const cacheMs = researchCacheHours(p.pe) * 3_600_000;
     const cached = jobs.find((j) => (j.status === "done" || j.status === "no_results") && within(j.finishedAt, cacheMs));
     if (cached) {

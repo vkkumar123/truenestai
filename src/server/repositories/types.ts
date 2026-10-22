@@ -243,6 +243,7 @@ export type EnqueueResearchResult =
   | { outcome: "queued"; job: ResearchJob }
   | { outcome: "active"; job: ResearchJob } // already queued or running
   | { outcome: "cached"; job: ResearchJob } // done/no_results within the cache TTL
+  | { outcome: "failed_recently"; job: ResearchJob } // failed (incl. stalled) within 6 hours
   | { outcome: "daily_cap" }
   | { outcome: "requester_cap" };
 
@@ -257,13 +258,23 @@ export interface ResearchJobWithListings extends ResearchJob {
   listings: ExternalListing[];
 }
 
+/** Queued jobs not picked up for this long are failed with error_code 'stalled' on the next enqueue. */
+export const RESEARCH_STALL_MINUTES = 30;
+/** A failed job for a key blocks re-research of that key for this long ("unavailable"). */
+export const RESEARCH_FAILURE_COOLDOWN_HOURS = 6;
+
 /**
  * Research job queue (service role only in Supabase). enqueue and claim are atomic in SQL
  * (research_enqueue / research_claim_jobs with FOR UPDATE SKIP LOCKED).
  */
 export interface ResearchJobRepository {
   enqueue(input: EnqueueResearchInput): Promise<EnqueueResearchResult>;
-  /** Marks up to `limit` queued jobs (and running jobs stale for staleMinutes) running; attempts + 1. */
+  /** Newest jobs for this key first (read-only; for rendering the page state without side effects). */
+  listForQuery(queryKey: string, limit: number): Promise<ResearchJob[]>;
+  /**
+   * Marks up to `limit` queued jobs (and running jobs stale for staleMinutes with a retry left)
+   * running; attempts + 1. Stale running jobs with attempts >= 2 become failed ('abandoned').
+   */
   claim(limit: number, staleMinutes: number): Promise<ResearchJob[]>;
   /** Records the outcome and links the stored listings. Only a running job can be finished. */
   finish(id: string, input: FinishResearchInput): Promise<ResearchJob | null>;

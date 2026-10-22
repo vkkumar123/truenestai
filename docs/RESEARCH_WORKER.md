@@ -3,22 +3,26 @@
 When a buyer's free-text search on `/projects` finds nothing in either lane, TrueNest queues a research job. A worker then looks the query up with Anthropic's server-side web search and stores what it can cite as **unverified Lane B listings**. Later searches for the same query are served from the database. Source policy: `docs/DATA_SOURCE_POLICY.md` §11.
 
 ## Flow
-1. **Miss.** `/projects?q=…` returns 0 researched and 0 external results, and external discovery was queried without errors. The page calls `requestResearchOnMiss` (`src/server/services/research-jobs.ts`).
-2. **Enqueue.** `research_enqueue` (SQL, atomic) works through these checks in order:
+1. **Miss (GET, read-only).** `/projects?q=…` returns 0 researched and 0 external results, and external discovery was queried without errors. The GET render only *reads* state with `lookupResearchOnMiss` (`src/server/services/research-jobs.ts`); it never enqueues. The result is one of: researching (a job is running, or queued within 30 minutes), searched_none (a recent `no_results` job), unavailable (the worker is not configured, or a job failed within 6 hours), or can_start.
+   - Bots are skipped: an empty or crawler-like `User-Agent` gets no research state and no trigger. `src/app/robots.ts` disallows `/projects?*q=`, `/admin` and `/api/`, and query pages carry `noindex, follow`.
+   - Outside fixture mode, when `ANTHROPIC_API_KEY` or a valid `RESEARCH_RUN_SECRET` is missing, the page shows the unavailable copy and nothing is queued, so a buyer never waits on a worker that cannot run.
+2. **Start (POST).** For can_start, the page renders `ResearchTrigger`. With JavaScript it auto-submits the `startWebResearchAction` Server Action once. Without JavaScript the buyer sees a "Research this search" button that does the same POST. The action re-runs the search server-side and enqueues only if it is still a miss, which it does through `requestResearchOnMiss`. Crawlers neither run JavaScript nor POST forms.
+3. **Enqueue.** `research_enqueue` (SQL, atomic, advisory-locked) first marks any job still `queued` after 30 minutes as `failed` with `stalled`. It then works through these checks in order:
    - If a job for the same normalised query (`queryKey`) is queued or running, it reuses that job.
    - If a done or `no_results` job finished within `RESEARCH_CACHE_HOURS`, it reuses that job.
+   - If a job for the query failed within the last 6 hours (this includes `stalled`), it returns `failed_recently`, and the page shows "can't start new research right now". After 6 hours a new job may be queued.
    - If the global cap `RESEARCH_MAX_JOBS_PER_DAY` is reached, it refuses.
    - If the requester's cap (10 per 24 hours, keyed by an HMAC of the client IP) is reached, it refuses.
    - Otherwise it inserts a new job.
 
-   A separate in-memory limit of 5 new jobs per client IP per hour is applied first; the client IP comes from `TRUSTED_PROXY_HOPS`.
-3. **Page states.** The page shows one of three states. None of them reads as "no projects exist":
+   A separate in-memory limit of 5 new jobs per client IP per hour is applied first. The client IP comes from `TRUSTED_PROXY_HOPS`, and the requester HMAC uses `SESSION_SECRET`. If the requester hash cannot be computed in production (no client IP or no secret), only the global cap applies and a one-time warning `research.requester_hash_unavailable` is logged.
+4. **Page states.** The page shows one of three states. None of them reads as "no projects exist":
    - "We're researching "X" now… refresh to check": the job is queued or running.
    - "We searched public web sources … found nothing we could cite reliably": a recent `no_results` job.
-   - "We can't start new research right now": a limit was hit.
-4. **Worker.** `POST /api/internal/research/run` with header `x-research-secret: $RESEARCH_RUN_SECRET`. It claims up to `RESEARCH_BATCH_SIZE` jobs (`research_claim_jobs`, `FOR UPDATE SKIP LOCKED`; running jobs older than 15 minutes are reclaimed) and processes them concurrently.
-5. **Per job.** The worker passes the registry gate (`assertRunnable`), calls Claude with web search, then validates the result against the citations (see Anti-fabrication). It runs the normal Lane B normalise and dedupe, upserts `external_listings` and links them in `research_job_listings`. The job ends as `done` or `no_results`. On a retryable error it is re-queued once, then marked `failed`.
-6. **Serve.** Search adds the listings of the newest done job for the query, plus stored research listings matching the text or locality. It adds them only while the research source is runnable in this environment.
+   - "We can't start new research right now": a limit was hit, the worker is not configured, or the query failed recently.
+5. **Worker.** `POST /api/internal/research/run` with header `x-research-secret: $RESEARCH_RUN_SECRET`. It claims up to `RESEARCH_BATCH_SIZE` jobs (`research_claim_jobs`, `FOR UPDATE SKIP LOCKED`; a running job older than 15 minutes is reclaimed if it has had fewer than 2 attempts, and otherwise marked `failed` with `abandoned`) and processes them concurrently.
+6. **Per job.** The worker passes the registry gate (`assertRunnable`), calls Claude with web search, then validates the result against the citations (see Anti-fabrication). It runs the normal Lane B normalise and dedupe, upserts `external_listings` and links them in `research_job_listings`. The job ends as `done` or `no_results`. On a retryable error it is re-queued once, then marked `failed`.
+7. **Serve.** Search adds the listings of the newest done job for the query, plus stored research listings matching the text or locality. It adds them only while the research source is runnable in this environment.
 
 ## Anti-fabrication
 `src/discovery/research/validate.ts` keeps a field only if its value appears in text **the API cited** for a URL that **appeared in that response's web search results**. Everything else is dropped:
@@ -26,9 +30,14 @@ When a buyer's free-text search on `/projects` finds nothing in either lane, Tru
 - URLs that were not returned by the search, or are not https
 - listing-portal hosts
 - localities that do not map to exactly one active locality in `src/config/markets/`
-- pages that name several projects
+- pages that name several projects. A candidate is dropped (`multiple_projects`) if its URL's citations contain more than one distinct RERA-shaped token, and also (`shared_url`) if several candidates share one URL.
 
-Searches run as direct calls (`allowed_callers: ["direct"]`) so every result comes back as an auditable `web_search_tool_result` block.
+Strict rules:
+- **Same citation, near the name.** A fact (RERA, price, developer, locality) counts only if it appears in a cited text that also names the candidate, within 200 characters of the name. This stops one project's facts from being attributed to another project on a multi-project page.
+- **Whole tokens.** A RERA number must equal a whole normalised token, never a fragment of a longer one or two tokens spliced together. A price must have a non-digit, non-dot boundary on both sides, so "45 L" does not match "1.45 L" and "5 Cr" does not match "2.5 Cr".
+- **Stored URL.** The URL stored is the one from the matching `web_search_tool_result`, not the URL the model wrote.
+
+The request does not set `allowed_callers` on `web_search_20260209`: the claude-api skill documents that field only for custom tools. When web search is called from code execution (dynamic filtering), its `web_search_tool_result` blocks still come back at the top level with a `caller` field, and the evidence extractor counts them. If the model returns candidates but the response has no search result blocks, the job fails closed with `no_evidence`.
 
 ## Cost guardrails
 | Guardrail | Value |
@@ -42,7 +51,7 @@ Searches run as direct calls (`allowed_callers: ["direct"]`) so every result com
 | Per-job deadline | 120 s (request timeout 110 s) |
 
 ## Environments
-- **Fixture backend** (dev, unit tests, e2e, CI): an in-memory queue, the `sample-web-research` fixture source and `FakeResearchClient`. It never touches the network. `npm run research:run` (once the script is added to `package.json`) processes only the jobs in its own process.
+- **Fixture backend** (dev, unit tests, e2e, CI): an in-memory queue, the `sample-web-research` fixture source and `FakeResearchClient`. It never touches the network. `npm run research:run` processes only the jobs in its own process.
 - **Supabase backend**: the `anthropic-web-search` source and `AnthropicResearchClient` (needs `ANTHROPIC_API_KEY`). Every path refuses until the registry entry is `approved` for the current environment. The worker then answers 503 `source_not_runnable`, and misses fall back to the normal empty state.
 
 ## Operations
@@ -57,4 +66,4 @@ Searches run as direct calls (`allowed_callers: ["direct"]`) so every result com
   - 503: the run was refused (`source_not_runnable` or `config`).
   - 200: `{claimed, outcomes: [{jobId, status, resultCount, errorCode}]}`.
 - **Logs** contain job ids, statuses, counts and token usage only. They never contain the API key, the prompt, response text, query text or IPs. Staff see the query text on `/admin/research-jobs` (admin and advisor, read-only).
-- **Error codes** (`research_jobs.error_code`): `timeout`, `rate_limited`, `api_error`, `auth`, `bad_request`, `refusal`, `max_tokens`, `parse_error`, `store_failed`, `unknown`.
+- **Error codes** (`research_jobs.error_code`): `timeout`, `rate_limited`, `api_error`, `auth`, `bad_request`, `refusal`, `max_tokens`, `parse_error`, `no_evidence` (candidates with no search result blocks), `store_failed`, `unknown`, `stalled` (still queued after 30 minutes, which usually means the worker is not scheduled; the failure is cached for 6 hours), and `abandoned` (still running after 15 minutes on its second attempt).

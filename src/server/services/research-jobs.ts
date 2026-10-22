@@ -14,10 +14,17 @@ import {
 } from "@/discovery/research";
 import { requireStaff } from "../auth";
 import { UNKNOWN_CLIENT_KEY } from "../client-ip";
-import { ConfigError, researchBatchSize, researchCacheHours, researchMaxJobsPerDay, sessionSecret } from "../env";
+import { ConfigError, researchBatchSize, researchCacheHours, researchMaxJobsPerDay, researchRunSecret, sessionSecret } from "../env";
 import { AnthropicResearchClient } from "../integrations/anthropic-research-client";
 import { log } from "../log";
-import { getRepositories, type Repositories, type ResearchJob, type ResearchJobWithListings } from "../repositories";
+import {
+  RESEARCH_FAILURE_COOLDOWN_HOURS,
+  RESEARCH_STALL_MINUTES,
+  getRepositories,
+  type Repositories,
+  type ResearchJob,
+  type ResearchJobWithListings,
+} from "../repositories";
 import { FixedWindowRateLimiter } from "./rate-limit";
 
 /** New research jobs one client may start per hour (in-memory, per instance; the DB caps per day). */
@@ -42,19 +49,39 @@ export function researchClientFor(backend: Repositories["backend"]): ResearchCli
 }
 
 // ---------------------------------------------------------------------------
-// Enqueue on a public search miss
+// Public search miss: read-only state for the GET render, enqueue only from a POST
 // ---------------------------------------------------------------------------
 
+/**
+ * Page state for a search miss. "can_start" means nothing is known for this query yet: the page
+ * renders the research trigger (a form posted to a Server Action, auto-submitted with JS).
+ */
 export type ResearchMissState =
   | { state: "researching"; queryText: string }
   | { state: "searched_none"; queryText: string; searchedAt: string }
-  | { state: "unavailable"; queryText: string };
+  | { state: "unavailable"; queryText: string }
+  | { state: "can_start"; queryText: string; localityId: string | null };
 
 const LIMITER_KEY = Symbol.for("truenest.researchEnqueueLimiter");
-type G = typeof globalThis & { [LIMITER_KEY]?: FixedWindowRateLimiter };
+const WARNED_KEY = Symbol.for("truenest.researchWarnings");
+type G = typeof globalThis & { [LIMITER_KEY]?: FixedWindowRateLimiter; [WARNED_KEY]?: Set<string> };
 function sharedLimiter(): FixedWindowRateLimiter {
   const g = globalThis as G;
   return (g[LIMITER_KEY] ??= new FixedWindowRateLimiter(RESEARCH_IP_MAX_PER_HOUR, 3_600_000));
+}
+
+/** Logs `event` once per server process. */
+function warnOnce(event: string, fields?: Record<string, string>) {
+  const g = globalThis as G;
+  const seen = (g[WARNED_KEY] ??= new Set());
+  if (seen.has(event)) return;
+  seen.add(event);
+  log.warn(event, fields);
+}
+
+/** Test hook. */
+export function resetResearchWarningsForTesting() {
+  (globalThis as G)[WARNED_KEY]?.clear();
 }
 
 /** HMAC of the client key (never the raw IP). null without a SESSION_SECRET or for the shared unknown bucket. */
@@ -69,6 +96,24 @@ export function requesterHash(clientKey: string, env: NodeJS.ProcessEnv = proces
   return createHmac("sha256", key).update(`research-requester:${clientKey}`).digest("hex");
 }
 
+/** Obvious crawlers, link previewers and scripted clients. An empty user agent counts as a bot. */
+const BOT_UA =
+  /bot\b|bot\/|crawl|spider|slurp|scrape|preview|facebookexternalhit|embedly|headless|phantom|lighthouse|python-|requests|curl\/|wget|httpclient|okhttp|go-http|java\/|libwww|node-fetch|axios|undici|postman/i;
+export function isLikelyBot(userAgent: string | null | undefined): boolean {
+  const ua = (userAgent ?? "").trim();
+  return ua.length === 0 || BOT_UA.test(ua);
+}
+
+/**
+ * Whether the worker can actually run for this backend. Fixture mode always can (fake client).
+ * Supabase mode needs ANTHROPIC_API_KEY and RESEARCH_RUN_SECRET; without them a job would sit
+ * queued forever, so the page says "unavailable" instead of "researching".
+ */
+export function researchWorkerConfigured(backend: Repositories["backend"], env: NodeJS.ProcessEnv = process.env): boolean {
+  if (backend === "fixture") return true;
+  return Boolean(env.ANTHROPIC_API_KEY?.trim()) && researchRunSecret(env) !== null;
+}
+
 export interface ResearchMissDeps {
   repos?: Repositories;
   env?: RuntimeEnv;
@@ -77,33 +122,94 @@ export interface ResearchMissDeps {
   now?: number;
 }
 
-/**
- * Called when a free-text search found 0 researched and 0 external results. Reuses an active or
- * recently finished job for the same normalised query; otherwise enqueues one, within the per-client
- * and global daily limits. Returns null when research cannot run here (source not runnable, query
- * too short, or an error), so the page falls back to its normal empty state.
- */
-export async function requestResearchOnMiss(
-  input: { queryText: string; localityId?: string | null; clientKey: string },
-  deps: ResearchMissDeps = {},
-): Promise<ResearchMissState | null> {
+type Prepared = { queryText: string; localityId: string | null; key: string; repos: Repositories; pe: NodeJS.ProcessEnv };
+
+/** null = research does not apply here (query too short, source not runnable): normal empty state. */
+function prepare(input: { queryText: string; localityId?: string | null }, deps: ResearchMissDeps): Prepared | null {
   const queryText = cleanQueryText(input.queryText);
   const localityId = input.localityId && getLocality(input.localityId) ? input.localityId : null;
   const key = queryKey(queryText, localityId);
   if (!key) return null;
   const repos = deps.repos ?? getRepositories();
-  const source = researchSourceFor(repos.backend);
-  if (!isRunnable(source, deps.env ?? currentEnv())) return null;
+  if (!isRunnable(researchSourceFor(repos.backend), deps.env ?? currentEnv())) return null;
+  return { queryText, localityId, key, repos, pe: deps.processEnv ?? process.env };
+}
 
-  const pe = deps.processEnv ?? process.env;
+/**
+ * READ-ONLY state for a search miss (safe in a GET render: never writes, never enqueues).
+ * Returns null when research does not apply here or for obvious bots.
+ */
+export async function lookupResearchOnMiss(
+  input: { queryText: string; localityId?: string | null; userAgent?: string | null },
+  deps: ResearchMissDeps = {},
+): Promise<ResearchMissState | null> {
+  const p = prepare(input, deps);
+  if (!p) return null;
+  if (isLikelyBot(input.userAgent)) return null;
+  if (!researchWorkerConfigured(p.repos.backend, p.pe)) {
+    warnOnce("research.worker_unconfigured", { backend: p.repos.backend });
+    return { state: "unavailable", queryText: p.queryText };
+  }
+  try {
+    const nowMs = deps.now ?? Date.now();
+    const within = (iso: string | null, ms: number) => !!iso && nowMs - Date.parse(iso) < ms;
+    const jobs = await p.repos.researchJobs.listForQuery(p.key, 10);
+    const { queryText } = p;
+    // Same precedence as research_enqueue: active → cached result → recent failure → can start.
+    // A queued job not picked up for RESEARCH_STALL_MINUTES is not "researching": the next
+    // enqueue marks it failed ('stalled').
+    if (jobs.some((j) => j.status === "running" || (j.status === "queued" && within(j.startedAt ?? j.requestedAt, RESEARCH_STALL_MINUTES * 60_000))))
+      return { state: "researching", queryText };
+    const cacheMs = researchCacheHours(p.pe) * 3_600_000;
+    const cached = jobs.find((j) => (j.status === "done" || j.status === "no_results") && within(j.finishedAt, cacheMs));
+    if (cached) {
+      return cached.status === "no_results" || cached.resultCount === 0
+        ? { state: "searched_none", queryText, searchedAt: cached.finishedAt ?? cached.requestedAt }
+        : null; // its listings are served by search
+    }
+    if (jobs.some((j) => j.status === "failed" && within(j.finishedAt, RESEARCH_FAILURE_COOLDOWN_HOURS * 3_600_000)))
+      return { state: "unavailable", queryText };
+    return { state: "can_start", queryText: p.queryText, localityId: p.localityId };
+  } catch (e) {
+    log.warn("research.lookup_failed", { reason: e instanceof Error ? e.name : "unknown" });
+    return null;
+  }
+}
+
+/**
+ * Starts research for a confirmed search miss (call only from a POST: the Server Action).
+ * Reuses an active job, a recent result or a recent failure for the same normalised query;
+ * otherwise enqueues one within the per-client and global daily limits. Bots never enqueue.
+ * Returns null when research does not apply here (normal empty state).
+ */
+export async function requestResearchOnMiss(
+  input: { queryText: string; localityId?: string | null; clientKey: string; userAgent?: string | null },
+  deps: ResearchMissDeps = {},
+): Promise<Exclude<ResearchMissState, { state: "can_start" }> | null> {
+  const p = prepare(input, deps);
+  if (!p) return null;
+  if (isLikelyBot(input.userAgent)) return null;
+  if (!researchWorkerConfigured(p.repos.backend, p.pe)) {
+    warnOnce("research.worker_unconfigured", { backend: p.repos.backend });
+    return { state: "unavailable", queryText: p.queryText };
+  }
+  const { queryText, key, localityId, repos, pe } = p;
   const limiter = deps.limiter ?? sharedLimiter();
   const blocked = limiter.isBlocked(input.clientKey, deps.now);
+  const ipHash = requesterHash(input.clientKey, pe);
+  if (ipHash === null && pe.NODE_ENV === "production") {
+    // Without SESSION_SECRET (or behind a proxy that sends no X-Forwarded-For) only the global
+    // daily cap and the in-memory per-instance limit protect against a single heavy client.
+    warnOnce("research.requester_hash_unavailable", {
+      reason: input.clientKey === UNKNOWN_CLIENT_KEY ? "no_client_ip" : "no_session_secret",
+    });
+  }
   try {
     const result = await repos.researchJobs.enqueue({
       queryText,
       queryKey: key,
       localityId,
-      requesterIpHash: requesterHash(input.clientKey, pe),
+      requesterIpHash: ipHash,
       cacheHours: researchCacheHours(pe),
       // A rate-limited client may still see an existing job, but cannot start one (cap 0).
       maxPerDay: blocked ? 0 : researchMaxJobsPerDay(pe),
@@ -120,6 +226,8 @@ export async function requestResearchOnMiss(
         return result.job.status === "no_results" || result.job.resultCount === 0
           ? { state: "searched_none", queryText, searchedAt: result.job.finishedAt ?? result.job.requestedAt }
           : null;
+      case "failed_recently":
+        return { state: "unavailable", queryText };
       case "daily_cap":
       case "requester_cap":
         log.warn("research.enqueue_limited", { outcome: blocked ? "client_rate_limit" : result.outcome });

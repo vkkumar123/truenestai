@@ -17,6 +17,8 @@ export interface ResearchEvidence {
   text: string;
   /** web_search_tool_result blocks that carried an error object instead of results. */
   searchErrors: number;
+  /** web_search_tool_result blocks seen (direct or called from code execution). */
+  searchResultBlocks: number;
 }
 
 export function extractEvidence(content: readonly ResearchContentBlock[]): ResearchEvidence {
@@ -24,8 +26,12 @@ export function extractEvidence(content: readonly ResearchContentBlock[]): Resea
   const citations: Citation[] = [];
   const texts: string[] = [];
   let searchErrors = 0;
+  let searchResultBlocks = 0;
   for (const block of content) {
+    // Results are top-level blocks whether Claude called the tool directly or from code
+    // execution (dynamic filtering sets `caller`); both are counted as evidence.
     if (block.type === "web_search_tool_result") {
+      searchResultBlocks++;
       // Success content is a list of results; an error is a single object.
       if (Array.isArray(block.content)) {
         for (const r of block.content) if (r.type === "web_search_result" && typeof r.url === "string") urls.add(r.url);
@@ -41,7 +47,7 @@ export function extractEvidence(content: readonly ResearchContentBlock[]): Resea
       }
     }
   }
-  return { searchResultUrls: [...urls], citations, text: texts.join(""), searchErrors };
+  return { searchResultUrls: [...urls], citations, text: texts.join(""), searchErrors, searchResultBlocks };
 }
 
 export class CandidateParseError extends Error {

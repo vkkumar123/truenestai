@@ -105,6 +105,22 @@ d("research_jobs", () => {
     });
   });
 
+  it("enqueue marks queued jobs older than 30 minutes 'stalled' and treats failures within 6 h as failed_recently", async () => {
+    await c.query("delete from research_jobs");
+    await asRole(c, "service_role", null, async (db) => {
+      await db.query(`insert into research_jobs (query_text, query_key, requested_at) values
+        ('SAMPLE stuck', 'stuck key', now() - interval '31 minutes'),
+        ('SAMPLE waiting', 'waiting key', now() - interval '5 minutes')`);
+      const [sql, p] = enqueue("stuck key");
+      expect((await db.query(sql, [...p])).rows[0].r).toMatchObject({ outcome: "failed_recently", job: { status: "failed", error_code: "stalled" } });
+      const waiting = (await db.query("select status from research_jobs where query_key = 'waiting key'")).rows[0];
+      expect(waiting.status).toBe("queued");
+      // A failure older than 6 hours no longer blocks a new job.
+      await db.query("update research_jobs set finished_at = now() - interval '7 hours' where query_key = 'stuck key'");
+      expect((await db.query(sql, [...p])).rows[0].r.outcome).toBe("queued");
+    });
+  });
+
   it("claim uses FOR UPDATE SKIP LOCKED: concurrent workers take disjoint jobs", async () => {
     await c.query("delete from research_jobs");
     await c.query(`insert into research_jobs (query_text, query_key, requested_at) values
@@ -126,14 +142,18 @@ d("research_jobs", () => {
     }
   });
 
-  it("claim reclaims stale running jobs only", async () => {
+  it("claim reclaims stale running jobs with a retry left and abandons the rest", async () => {
     await c.query("delete from research_jobs");
     await c.query(`insert into research_jobs (query_text, query_key, status, started_at, attempts) values
       ('SAMPLE stale', 'stale', 'running', now() - interval '30 minutes', 1),
+      ('SAMPLE spent', 'spent', 'running', now() - interval '30 minutes', 2),
       ('SAMPLE fresh', 'fresh', 'running', now() - interval '1 minute', 1)`);
     await asRole(c, "service_role", null, async (db) => {
       const rows = (await db.query("select research_claim_jobs(5, 15) as j")).rows.map((r) => r.j);
       expect(rows.map((j) => [j.query_key, j.attempts])).toEqual([["stale", 2]]);
+      const spent = (await db.query("select status, error_code, finished_at is not null as done from research_jobs where query_key = 'spent'")).rows[0];
+      expect(spent).toEqual({ status: "failed", error_code: "abandoned", done: true });
+      expect((await db.query("select status from research_jobs where query_key = 'fresh'")).rows[0].status).toBe("running");
     });
   });
 

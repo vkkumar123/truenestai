@@ -1,6 +1,7 @@
 import "server-only";
 import { z } from "zod";
 import type { Project } from "@/domain/types";
+import { currentEnv, getSource, isRunnable, isWebResearchSource, type RuntimeEnv } from "@/discovery";
 import { getRepositories, type Repositories } from "../repositories";
 
 const slugSchema = z.string().trim().min(1).max(120).regex(/^[a-z0-9]+(-[a-z0-9]+)*$/);
@@ -33,7 +34,7 @@ export interface RequestSubject {
  */
 export async function getRequestSubject(
   ref: { projectId?: string | null; externalListingId?: string | null },
-  deps: { repos?: Repositories } = {},
+  deps: { repos?: Repositories; env?: RuntimeEnv } = {},
 ): Promise<RequestSubject | null> {
   const repos = deps.repos ?? getRepositories();
   const projectId = idSchema.safeParse(ref.projectId);
@@ -45,6 +46,12 @@ export async function getRequestSubject(
   const listingId = idSchema.safeParse(ref.externalListingId);
   if (listingId.success) {
     const l = await repos.externalListings.getById(listingId.data);
+    // Web research listings are shown only while their source may run here (a suspended source
+    // hides everything it found, including on the request form).
+    if (l && isWebResearchSource(l.sourceId)) {
+      const source = getSource(l.sourceId);
+      if (!source || !isRunnable(source, deps.env ?? currentEnv())) return null;
+    }
     if (l) return { kind: "external_listing", id: l.id, name: l.title, isSample: l.isSample };
   }
   return null;

@@ -27,7 +27,7 @@ create table public.research_jobs (
 -- At most one active job per normalised query. "Recent" (cache TTL) is checked in research_enqueue.
 create unique index research_jobs_active_key on public.research_jobs (query_key) where status in ('queued','running');
 create index research_jobs_key_finished_idx on public.research_jobs (query_key, finished_at desc)
-  where status in ('done','no_results');
+  where status in ('done','no_results','failed');
 create index research_jobs_queue_idx on public.research_jobs (requested_at) where status in ('queued','running');
 create index research_jobs_requested_idx on public.research_jobs (requested_at desc);
 
@@ -46,9 +46,17 @@ grant select, insert, delete on public.research_job_listings to service_role;
 -- No policies for anon/authenticated: with RLS on and no grants they can neither see nor write.
 
 -- ---------------------------------------------------------------------------
--- Enqueue (atomic): reuse an active job, reuse a done/no_results job within the cache TTL,
--- else enforce the global and per-requester 24-hour caps, else insert. A transaction-scoped
--- advisory lock serialises enqueues so concurrent misses cannot exceed the caps.
+-- Enqueue (atomic), in order:
+--   1. Queued jobs not picked up for 30 minutes (worker down or misconfigured) are marked
+--      failed with error_code 'stalled', so they stop showing as "researching" and stop holding
+--      their query key.
+--   2. Reuse an active (queued/running) job for the key            → 'active'
+--   3. Reuse a done/no_results job within p_cache_hours            → 'cached'
+--   4. Reuse a failed job (including 'stalled') within 6 hours     → 'failed_recently'
+--      (no automatic re-research of a failing query; the page shows "unavailable")
+--   5. Global and per-requester 24-hour caps                        → 'daily_cap' / 'requester_cap'
+--   6. Insert                                                       → 'queued'
+-- A transaction-scoped advisory lock serialises enqueues so concurrent misses cannot exceed caps.
 -- ---------------------------------------------------------------------------
 create or replace function public.research_enqueue(
   p_query_text text,
@@ -66,6 +74,10 @@ declare
 begin
   perform pg_advisory_xact_lock(hashtext('tn_research_enqueue'));
 
+  update public.research_jobs
+     set status = 'failed', error_code = 'stalled', finished_at = now()
+   where status = 'queued' and coalesce(started_at, requested_at) < now() - interval '30 minutes';
+
   select * into v_job from public.research_jobs
     where query_key = p_query_key and status in ('queued','running') limit 1;
   if found then
@@ -78,6 +90,13 @@ begin
     order by finished_at desc limit 1;
   if found then
     return jsonb_build_object('outcome', 'cached', 'job', to_jsonb(v_job) - 'requester_ip_hash');
+  end if;
+
+  select * into v_job from public.research_jobs
+    where query_key = p_query_key and status = 'failed' and finished_at > now() - interval '6 hours'
+    order by finished_at desc limit 1;
+  if found then
+    return jsonb_build_object('outcome', 'failed_recently', 'job', to_jsonb(v_job) - 'requester_ip_hash');
   end if;
 
   select count(*) into v_count from public.research_jobs where requested_at > now() - interval '24 hours';
@@ -100,21 +119,34 @@ begin
 end $$;
 
 -- Claim (atomic): oldest queued jobs, plus running jobs whose worker died (started over
--- p_stale_minutes ago). FOR UPDATE SKIP LOCKED lets concurrent workers take disjoint jobs.
+-- p_stale_minutes ago) that still have a retry left. Stale running jobs that already used both
+-- attempts are marked failed with error_code 'abandoned' instead of being reclaimed.
+-- FOR UPDATE SKIP LOCKED lets concurrent workers take disjoint jobs.
 create or replace function public.research_claim_jobs(p_limit integer, p_stale_minutes integer)
 returns setof jsonb
-language sql security invoker set search_path = public, pg_temp as $$
+language plpgsql security invoker set search_path = public, pg_temp as $$
+begin
+  update public.research_jobs
+     set status = 'failed', error_code = 'abandoned', finished_at = now()
+   where id in (
+     select id from public.research_jobs
+      where status = 'running' and attempts >= 2
+        and started_at < now() - make_interval(mins => greatest(p_stale_minutes, 1))
+      for update skip locked);
+
+  return query
   update public.research_jobs j
      set status = 'running', started_at = now(), attempts = j.attempts + 1
    where j.id in (
      select id from public.research_jobs
       where status = 'queued'
-         or (status = 'running' and started_at < now() - make_interval(mins => greatest(p_stale_minutes, 1)))
+         or (status = 'running' and attempts < 2
+             and started_at < now() - make_interval(mins => greatest(p_stale_minutes, 1)))
       order by requested_at
       for update skip locked
       limit greatest(0, least(p_limit, 20)))
   returning to_jsonb(j) - 'requester_ip_hash';
-$$;
+end $$;
 
 -- Finish: only a running job; 'queued' re-queues for one retry (refused once attempts >= 2, which
 -- becomes 'failed'). Links the stored listings. Returns null when the job is not running.

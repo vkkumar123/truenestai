@@ -4,9 +4,11 @@ import { Suspense } from "react";
 import { connection } from "next/server";
 import { Info } from "lucide-react";
 import { getLocality, listLocalities } from "@/config/markets";
-import { searchProperties } from "@/server/services/search";
-import { requestResearchOnMiss } from "@/server/services/research-jobs";
-import { requestClientKey } from "@/server/client-ip";
+import { headers } from "next/headers";
+import { isSearchMiss, searchProperties } from "@/server/services/search";
+import { lookupResearchOnMiss } from "@/server/services/research-jobs";
+import { ResearchNotice } from "@/components/research/research-notice";
+import { ResearchTrigger } from "@/components/research/research-trigger";
 import { Alert, AlertTitle } from "@/components/ui/alert";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/components/ui/cn";
@@ -17,13 +19,18 @@ import { withCompare } from "@/components/property/compare-url";
 import { EXTERNAL_LABEL, ExternalListingCard } from "@/components/property/external-card";
 import { ProjectCard } from "@/components/property/project-card";
 import { LocalitySearch } from "@/components/site/locality-search";
-import { formatDate } from "@/components/property/format";
 import { ResultsSkeleton } from "./results-skeleton";
 
-export const metadata: Metadata = {
+const BASE_METADATA: Metadata = {
   title: "Browse projects",
   description: "Researched and externally discovered residential projects in North Bengaluru.",
 };
+
+/** Free-text result pages are not indexed (crawlers must not trigger or surface research). */
+export async function generateMetadata({ searchParams }: PageProps<"/projects">): Promise<Metadata> {
+  const q = first((await searchParams).q);
+  return q ? { ...BASE_METADATA, robots: { index: false, follow: true } } : BASE_METADATA;
+}
 
 function first(v: string | string[] | undefined): string {
   return (Array.isArray(v) ? v[0] : v)?.trim() ?? "";
@@ -79,10 +86,10 @@ async function Results({ searchParams }: { searchParams: PageProps<"/projects">[
   });
   const { researched, external, externalErrors, notes, matchedProjects } = result;
   const total = researched.length + external.length;
-  // A free-text miss in both lanes starts (or reuses) on-demand web research. Request-time only.
-  const isMiss = Boolean(q) && result.externalQueried && !externalErrors?.length && total === 0;
-  const research = isMiss
-    ? await requestResearchOnMiss({ queryText: q, localityId: locality || null, clientKey: await requestClientKey() })
+  // A free-text miss in both lanes may use on-demand web research. This GET render only READS the
+  // research state; starting research is a POST (ResearchTrigger → Server Action).
+  const research = isSearchMiss(result, q)
+    ? await lookupResearchOnMiss({ queryText: q, localityId: locality || null, userAgent: (await headers()).get("user-agent") })
     : null;
   const filterText = [bhk ? `${bhk} BHK` : "", status ? CONSTRUCTION_STATUS_LABELS[status] : ""].filter(Boolean).join(", ");
 
@@ -100,29 +107,12 @@ async function Results({ searchParams }: { searchParams: PageProps<"/projects">[
         {filterText ? ` (${filterText})` : ""}.
       </p>
 
-      {research?.state === "researching" ? (
-        <Alert tone="info" role="status">
-          <AlertTitle>We’re researching “{research.queryText}” now</AlertTitle>
-          <p>
-            Results usually appear within a few minutes; refresh this page to check. Anything we find comes from public web
-            pages and is labelled unverified until TrueNest checks it.
-          </p>
-        </Alert>
+      {research?.state === "can_start" ? (
+        <ResearchTrigger queryText={research.queryText} localityId={research.localityId} />
       ) : research?.state === "searched_none" ? (
-        <Alert role="status">
-          <AlertTitle>We searched public web sources for “{research.queryText}” on {formatDate(research.searchedAt)}</AlertTitle>
-          <p>
-            We found nothing we could cite reliably. That does not mean no projects exist.{" "}
-            <Link href="/request?type=buyer_assistance">Ask us to look</Link>.
-          </p>
-        </Alert>
-      ) : research?.state === "unavailable" ? (
-        <Alert role="status">
-          <AlertTitle>We can’t start new research right now</AlertTitle>
-          <p>
-            Please try again later, or <Link href="/request?type=buyer_assistance">ask us to look</Link>.
-          </p>
-        </Alert>
+        <ResearchNotice state={{ status: "searched_none", queryText: research.queryText, searchedAt: research.searchedAt }} />
+      ) : research ? (
+        <ResearchNotice state={{ status: research.state, queryText: research.queryText }} />
       ) : null}
 
       {notes?.length ? (

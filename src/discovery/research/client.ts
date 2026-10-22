@@ -46,6 +46,7 @@ export type ResearchErrorCode =
   | "refusal"
   | "max_tokens"
   | "parse_error"
+  | "no_evidence"
   | "source_not_runnable"
   | "config"
   | "store_failed"

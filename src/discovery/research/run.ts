@@ -61,6 +61,9 @@ export async function researchQuery(queryText: string, opts: ResearchRunOptions)
     if (e instanceof CandidateParseError) throw new ResearchClientError("parse_error", true, res.usage);
     throw e;
   }
+  // Fail closed and visibly if candidates arrive without any search-result blocks to check them
+  // against (e.g. an API change that stops returning them): every candidate would be dropped.
+  if (candidates.length > 0 && evidence.searchResultBlocks === 0) throw new ResearchClientError("no_evidence", false, res.usage);
   const report = validateCandidates(candidates, evidence);
 
   const source = opts.source;

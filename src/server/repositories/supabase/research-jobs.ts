@@ -74,6 +74,17 @@ export class SupabaseResearchJobRepository implements ResearchJobRepository {
     return { outcome: r.outcome, job: mapJob(r.job!) };
   }
 
+  async listForQuery(queryKey: string, limit: number): Promise<ResearchJob[]> {
+    const { data, error } = await this.db()
+      .from("research_jobs")
+      .select(JOB_COLUMNS)
+      .eq("query_key", queryKey)
+      .order("requested_at", { ascending: false })
+      .limit(Math.max(1, Math.min(20, limit)));
+    if (error) throw new Error(`listForQuery failed: ${error.code ?? "unknown"}`);
+    return ((data ?? []) as unknown as ResearchJobRow[]).map(mapJob);
+  }
+
   async claim(limit: number, staleMinutes: number): Promise<ResearchJob[]> {
     const { data, error } = await this.db().rpc("research_claim_jobs", { p_limit: limit, p_stale_minutes: staleMinutes });
     if (error) throw new Error(`research_claim_jobs failed: ${error.code ?? "unknown"}`);

@@ -1,6 +1,7 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import type { ExternalListing } from "@/domain/types";
+import { RESEARCH_FAILURE_COOLDOWN_HOURS, RESEARCH_STALL_MINUTES } from "../types";
 import type {
   EnqueueResearchInput,
   EnqueueResearchResult,
@@ -35,6 +36,13 @@ export class FixtureResearchJobRepository implements ResearchJobRepository {
 
   async enqueue(input: EnqueueResearchInput): Promise<EnqueueResearchResult> {
     const now = this.clock().getTime();
+    for (const r of this.rows.values()) {
+      if (r.status === "queued" && now - Date.parse(r.startedAt ?? r.requestedAt) > RESEARCH_STALL_MINUTES * 60_000) {
+        r.status = "failed";
+        r.errorCode = "stalled";
+        r.finishedAt = new Date(now).toISOString();
+      }
+    }
     const all = [...this.rows.values()].sort((a, b) => b.requestedAt.localeCompare(a.requestedAt));
     const same = all.filter((r) => r.queryKey === input.queryKey);
     const active = same.find((r) => r.status === "queued" || r.status === "running");
@@ -43,6 +51,10 @@ export class FixtureResearchJobRepository implements ResearchJobRepository {
       (r) => (r.status === "done" || r.status === "no_results") && r.finishedAt && now - Date.parse(r.finishedAt) < input.cacheHours * HOUR,
     );
     if (cached) return { outcome: "cached", job: this.view(cached) };
+    const failed = same.find(
+      (r) => r.status === "failed" && r.finishedAt && now - Date.parse(r.finishedAt) < RESEARCH_FAILURE_COOLDOWN_HOURS * HOUR,
+    );
+    if (failed) return { outcome: "failed_recently", job: this.view(failed) };
     const lastDay = all.filter((r) => now - Date.parse(r.requestedAt) < 24 * HOUR);
     if (lastDay.length >= input.maxPerDay) return { outcome: "daily_cap" };
     if (input.requesterIpHash && lastDay.filter((r) => r.requesterIpHash === input.requesterIpHash).length >= input.maxPerRequesterPerDay)
@@ -66,11 +78,27 @@ export class FixtureResearchJobRepository implements ResearchJobRepository {
     return { outcome: "queued", job: this.view(row) };
   }
 
+  async listForQuery(queryKey: string, limit: number): Promise<ResearchJob[]> {
+    return [...this.rows.values()]
+      .filter((r) => r.queryKey === queryKey)
+      .sort((a, b) => b.requestedAt.localeCompare(a.requestedAt))
+      .slice(0, limit)
+      .map((r) => this.view(r));
+  }
+
   async claim(limit: number, staleMinutes: number): Promise<ResearchJob[]> {
     const now = this.clock();
     const stale = now.getTime() - staleMinutes * 60_000;
+    const isStale = (r: Row) => r.status === "running" && !!r.startedAt && Date.parse(r.startedAt) < stale;
+    for (const r of this.rows.values()) {
+      if (isStale(r) && r.attempts >= 2) {
+        r.status = "failed";
+        r.errorCode = "abandoned";
+        r.finishedAt = now.toISOString();
+      }
+    }
     const ready = [...this.rows.values()]
-      .filter((r) => r.status === "queued" || (r.status === "running" && r.startedAt && Date.parse(r.startedAt) < stale))
+      .filter((r) => r.status === "queued" || isStale(r))
       .sort((a, b) => a.requestedAt.localeCompare(b.requestedAt))
       .slice(0, Math.max(0, limit));
     for (const r of ready) {

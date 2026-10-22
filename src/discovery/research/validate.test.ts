@@ -4,7 +4,7 @@ import { extractEvidence, parseCandidates } from "./evidence";
 import { fakeCitedText, fakeSearchResult, fakeText } from "./fake-client";
 import { isBlockedPortalUrl } from "./portals";
 import { queryKey } from "./query";
-import { citedPrice, citedRera, matchLocality, validateCandidates } from "./validate";
+import { FACT_WINDOW, citedPrice, citedRera, matchLocality, nameWindows, reraTokens, validateCandidates } from "./validate";
 
 const [LOC, LOC2] = listLocalities({ activeOnly: true });
 const URL_A = "https://example.com/sample/a";
@@ -166,5 +166,92 @@ describe("queryKey", () => {
     expect(queryKey("2BHK  Hebbal!")).toBe(queryKey("hebbal, 2bhk 2BHK"));
     expect(queryKey("ab")).toBe("");
     expect(queryKey("Hebbal", "hebbal")).toBe("hebbal @hebbal");
+  });
+});
+
+describe("M1: facts must be cited next to the candidate's name", () => {
+  it("drops facts that are cited only in another citation on the same page", () => {
+    const ev = evidence([
+      { url: URL_A, citedText: `SAMPLE Alpha Homes is a project in ${LOC.name}.` },
+      { url: URL_A, citedText: "SAMPLE Beta Towers by SAMPLE Builder Co. Price ₹ 95 Lakh onwards." },
+    ]);
+    const r = validateCandidates([{ ...good, address: null, reraNumbers: [] }], ev);
+    expect(r.accepted).toHaveLength(1);
+    expect(r.accepted[0]).toMatchObject({ developerName: null, priceText: null, localityId: LOC.id });
+    expect(r.fieldsDropped).toEqual({ developerName: 1, priceText: 1 });
+  });
+
+  it("drops a fact more than FACT_WINDOW characters from the name in the same citation", () => {
+    const filler = "SAMPLE filler words ".repeat(Math.ceil((FACT_WINDOW + 40) / 20));
+    const cited = `SAMPLE Alpha Homes in ${LOC.name}. ${filler} Price ₹ 95 Lakh onwards.`;
+    const r = validateCandidates([{ ...good, developerName: null, address: null, reraNumbers: [] }], evidence([{ url: URL_A, citedText: cited }]));
+    expect(r.accepted[0].priceText).toBeNull();
+    expect(r.fieldsDropped).toEqual({ priceText: 1 });
+  });
+
+  it("drops a locality that is cited only away from the name", () => {
+    const r = validateCandidates(
+      [{ ...good, address: null }],
+      evidence([
+        { url: URL_A, citedText: "SAMPLE Alpha Homes by SAMPLE Builder Co." },
+        { url: URL_A, citedText: `Other projects in ${LOC.name}.` },
+      ]),
+    );
+    expect(r.dropped).toEqual({ locality_not_cited: 1 });
+  });
+
+  it("drops a candidate whose page cites more than one registration number", () => {
+    const r = validateCandidates(
+      [good],
+      evidence([
+        { url: URL_A, citedText: CITED_A },
+        { url: URL_A, citedText: "SAMPLE Beta Towers RERA No. PRM/KA/RERA/1251/309/PR/000002." },
+      ]),
+    );
+    expect(r.dropped).toEqual({ multiple_projects: 1 });
+    expect(reraTokens("PRM/KA/RERA/1251/309/PR/000001 and agent PRM/KA/RERA/1251/309/AG/000099")).toHaveLength(1);
+  });
+});
+
+describe("M2: no fragment or splice matches", () => {
+  it("RERA numbers must equal a whole token", () => {
+    const text = "RERA: PRM/KA/RERA/1251/309/PR/0000012 and 1251/309";
+    expect(citedRera("PRM/KA/RERA/1251/309/PR/000001", text)).toBe(false); // prefix of a longer number
+    expect(citedRera("RERA/1251/309/PR/0000012", text)).toBe(false); // suffix of a token
+    expect(citedRera("PRM/KA/RERA/1251/309/PR/0000012", text)).toBe(true);
+    expect(citedRera("0000012 and 1251", text)).toBe(false); // splice across tokens
+  });
+  it("prices need number boundaries on both sides", () => {
+    expect(citedPrice("45 L", "₹ 1.45 L onwards")).toBe(false);
+    expect(citedPrice("5 Cr", "₹ 2.5 Cr")).toBe(false);
+    expect(citedPrice("5 Cr", "₹ 25 Cr")).toBe(false);
+    expect(citedPrice("1.1 Cr", "₹ 1.10 Cr")).toBe(false);
+    expect(citedPrice("₹ 1", "₹ 15 Lakh")).toBe(false);
+    expect(citedPrice("₹ 2.5 Cr", "Price: ₹2.5 Cr.")).toBe(true);
+    expect(citedPrice("95 Lakh", "from 95 lakh onwards")).toBe(true);
+  });
+  it("a window edge never cuts a number into a fragment", () => {
+    const pad = "x".repeat(FACT_WINDOW - 3);
+    const windows = nameWindows("SAMPLE Alpha Homes", `PRM/KA/RERA/1251/309/PR/000001 ${pad} SAMPLE Alpha Homes`);
+    expect(windows).toHaveLength(1);
+    expect(windows[0].startsWith("prm/ka/rera/1251/309/pr/000001")).toBe(true);
+  });
+});
+
+describe("L1/L2: stored URL and evidence blocks", () => {
+  it("stores the search result's URL, not the model's spelling of it", () => {
+    const result = "https://example.com/sample/a?utm_source=x";
+    const r = validateCandidates(
+      [{ ...good, sourceUrl: "https://www.example.com/sample/a/" }],
+      evidence([{ url: result, citedText: CITED_A }], [result]),
+    );
+    expect(r.accepted[0].canonicalUrl).toBe(result);
+  });
+  it("counts web_search_tool_result blocks called from code execution (dynamic filtering)", () => {
+    const ev = extractEvidence([
+      { ...fakeSearchResult([{ url: URL_A, title: "A" }]), caller: { type: "code_execution_20260120", tool_id: "srvtoolu_x" } },
+    ] as never);
+    expect(ev.searchResultUrls).toEqual([URL_A]);
+    expect(ev.searchResultBlocks).toBe(1);
   });
 });

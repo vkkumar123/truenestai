@@ -2,7 +2,8 @@
 //
 // Rule: a field survives only if its value appears in text that the API itself cited for the
 // candidate's URL, and that URL appeared in this response's web search results. The model's own
-// "quote" is never trusted as evidence. A candidate also needs an https URL off the blocked
+// "quote" is never trusted as evidence. Each fact must also sit in the same citation as the
+// candidate's name, within FACT_WINDOW characters of it. A candidate needs an https URL off the blocked
 // portal list, a cited name, and a locality that maps to exactly one active configured locality
 // (src/config/markets alias matching) and is itself cited. Anything else is dropped and counted.
 import { z } from "zod";
@@ -26,6 +27,7 @@ export type DropReason =
   | "ambiguous_locality"
   | "locality_not_cited"
   | "shared_url"
+  | "multiple_projects"
   | "over_limit";
 
 export type FieldName = "developerName" | "address" | "priceText" | "reraNumbers";
@@ -67,23 +69,80 @@ function words(s: string): string {
   return ` ${s.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim()} `;
 }
 
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const canon = (s: string) => s.normalize("NFKC").toLowerCase();
+
+/** Characters either side of the candidate's name that a fact must fall within (same citation). */
+export const FACT_WINDOW = 200;
+
 /** Whole-word, punctuation-insensitive containment. */
 export function citedPhrase(value: string, cited: string): boolean {
   const v = words(value);
   return v.trim().length >= 2 && words(cited).includes(v);
 }
 
-/** Price text: case- and whitespace-insensitive containment, must contain a digit. */
+/**
+ * Price text: case- and spacing-insensitive, must contain a digit, and must not start or end in
+ * the middle of a number ("45 L" does not match "1.45 L"; "5 Cr" does not match "2.5 Cr" or "25 Cr").
+ */
 export function citedPrice(value: string, cited: string): boolean {
-  const squash = (s: string) => s.normalize("NFKC").toLowerCase().replace(/\s+/g, "");
-  return /\d/.test(value) && squash(cited).includes(squash(value));
+  const v = canon(value).trim();
+  if (!/\d/.test(v)) return false;
+  const pieces = v.match(/\d[\d.,]*|[^\d\s]+/gu);
+  if (!pieces) return false;
+  // Number boundaries only where the value itself starts/ends with a digit.
+  const head = /^\d/.test(pieces[0]) ? "(?<![\\d.])" : "";
+  const tail = /\d$/.test(pieces[pieces.length - 1]) ? "(?!\\.?\\d)" : "";
+  const re = new RegExp(`${head}${pieces.map(escapeRe).join("\\s*")}${tail}`, "u");
+  return re.test(canon(cited));
 }
 
-/** RERA number: compared as A-Z0-9 only; needs >= 8 characters and a digit to avoid trivial matches. */
+/** Whitespace-delimited tokens with surrounding punctuation trimmed (slashes and hyphens kept inside). */
+function tokens(text: string): string[] {
+  return canon(text)
+    .split(/[\s,;:()[\]{}"'<>|]+/u)
+    .map((t) => t.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ""))
+    .filter(Boolean);
+}
+
+/**
+ * RERA number: equal, as A-Z0-9, to one WHOLE token of the citation (no fragments of a longer
+ * number, no splices across tokens). Needs >= 8 characters and a digit.
+ */
 export function citedRera(value: string, cited: string): boolean {
   const v = normaliseRera(value);
   if (!v || v.length < 8 || !/\d/.test(v)) return false;
-  return (normaliseRera(cited) ?? "").includes(v);
+  return tokens(cited).some((t) => normaliseRera(t) === v);
+}
+
+/** Distinct project-registration-shaped tokens (e.g. PRM/KA/RERA/…/PR/…; agent "AG" numbers excluded). */
+export function reraTokens(text: string): string[] {
+  const out = new Set<string>();
+  for (const t of tokens(text)) {
+    const segs = t.toUpperCase().split(/[/\-]+/).filter(Boolean);
+    if (segs.length < 4 || !segs.includes("RERA") || segs.includes("AG")) continue;
+    if ((t.match(/\d/g) ?? []).length < 4) continue;
+    out.add(normaliseRera(t)!);
+  }
+  return [...out];
+}
+
+/** Slices of `cited` within FACT_WINDOW characters of each whole-word occurrence of `name`. */
+export function nameWindows(name: string, cited: string): string[] {
+  const parts = canon(name).match(/[\p{L}\p{N}]+/gu);
+  if (!parts?.length) return [];
+  const text = canon(cited);
+  const re = new RegExp(`(?<![\\p{L}\\p{N}])${parts.map(escapeRe).join("[^\\p{L}\\p{N}]+")}(?![\\p{L}\\p{N}])`, "gu");
+  const out: string[] = [];
+  for (const m of text.matchAll(re)) {
+    // Widen to whitespace so a window edge never cuts a number or registration into a fragment.
+    let start = Math.max(0, m.index - FACT_WINDOW);
+    while (start > 0 && !/\s/u.test(text[start - 1])) start--;
+    let end = Math.min(text.length, m.index + m[0].length + FACT_WINDOW);
+    while (end < text.length && !/\s/u.test(text[end])) end++;
+    out.push(text.slice(start, end));
+  }
+  return out;
 }
 
 function localityTerms(loc: Locality): string[] {
@@ -114,7 +173,12 @@ function inc<K extends string>(m: Partial<Record<K, number>>, k: K) {
 export function validateCandidates(candidates: readonly unknown[], evidence: ResearchEvidence): ValidationReport {
   const dropped: ValidationReport["dropped"] = {};
   const fieldsDropped: ValidationReport["fieldsDropped"] = {};
-  const resultUrls = new Set(evidence.searchResultUrls.map(normaliseUrl));
+  // Normalised URL → the URL exactly as the web search tool returned it (what we store).
+  const resultUrls = new Map<string, string>();
+  for (const u of evidence.searchResultUrls) {
+    const k = normaliseUrl(u);
+    if (!resultUrls.has(k)) resultUrls.set(k, u);
+  }
   const citedByUrl = new Map<string, string[]>();
   for (const c of evidence.citations as Citation[]) {
     const key = normaliseUrl(c.url);
@@ -129,16 +193,26 @@ export function validateCandidates(candidates: readonly unknown[], evidence: Res
     if (!parsed.success) return inc(dropped, "malformed");
     const c = parsed.data;
 
-    const url = safeHttpsUrl(c.sourceUrl);
+    const claimed = safeHttpsUrl(c.sourceUrl);
+    if (!claimed) return inc(dropped, "url_not_https");
+    if (isBlockedPortalUrl(claimed)) return inc(dropped, "portal_host");
+    const urlKey = normaliseUrl(claimed);
+    const resultUrl = resultUrls.get(urlKey);
+    if (!resultUrl) return inc(dropped, "url_not_in_results");
+    // Store the search result's own URL, never the model's spelling of it.
+    const url = safeHttpsUrl(resultUrl);
     if (!url) return inc(dropped, "url_not_https");
     if (isBlockedPortalUrl(url)) return inc(dropped, "portal_host");
-    const urlKey = normaliseUrl(url);
-    if (!resultUrls.has(urlKey)) return inc(dropped, "url_not_in_results");
     const cited = citedByUrl.get(urlKey) ?? [];
     if (!cited.length) return inc(dropped, "no_citation");
-    const isCited = (check: (v: string, t: string) => boolean, v: string) => cited.some((t) => check(v, t));
+    // A page whose citations name several registrations is a multi-project page: facts on it
+    // cannot be attributed to one project safely.
+    if (new Set(cited.flatMap(reraTokens)).size > 1) return inc(dropped, "multiple_projects");
 
-    if (!isCited(citedPhrase, c.name)) return inc(dropped, "name_not_cited");
+    // Every fact must sit in the same citation as the name, within FACT_WINDOW characters of it.
+    const windows = cited.flatMap((t) => nameWindows(c.name, t));
+    if (!windows.length) return inc(dropped, "name_not_cited");
+    const isCited = (check: (v: string, t: string) => boolean, v: string) => windows.some((w) => check(v, w));
 
     // Locality from the stated locality first, then the address.
     let loc = matchLocality(c.localityText);

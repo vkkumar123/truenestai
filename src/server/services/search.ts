@@ -225,3 +225,11 @@ export async function searchProperties(raw: SearchQuery = {}, deps: SearchDeps =
   }
   return done(result);
 }
+
+/**
+ * A free-text search that found nothing in either lane, with Lane B actually queried and no
+ * source errors: the only case that may start on-demand research.
+ */
+export function isSearchMiss(result: SearchResult, text: string | undefined): boolean {
+  return Boolean(text?.trim()) && result.externalQueried && !result.externalErrors?.length && result.researched.length === 0 && result.external.length === 0;
+}

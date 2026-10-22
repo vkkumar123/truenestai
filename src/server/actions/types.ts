@@ -45,3 +45,11 @@ export type ResearchActionState =
 /** Shown alongside a successful research action that auto-unpublished the project (D13). */
 export const AUTO_UNPUBLISHED_MESSAGE =
   "The project no longer passes publish checks and was unpublished until an admin re-verifies it.";
+
+/** On-demand web research trigger (startWebResearchAction). Initial state: `{ status: "idle" }`. */
+export type WebResearchActionState =
+  | { status: "idle" }
+  | { status: "none" } // research does not apply (not a miss, too short, bot, or an error)
+  | { status: "researching"; queryText: string }
+  | { status: "searched_none"; queryText: string; searchedAt: string }
+  | { status: "unavailable"; queryText: string };

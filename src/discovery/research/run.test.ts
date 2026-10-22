@@ -75,5 +75,10 @@ describe("researchQuery with the fake client", () => {
     await expect(run("max_tokens")).rejects.toMatchObject({ code: "max_tokens", retryable: false });
     await expect(run("end_turn", "no json")).rejects.toMatchObject({ code: "parse_error", retryable: true });
     await expect(run("end_turn", "[]")).resolves.toMatchObject({ listings: [] });
+    // Candidates but no web_search_tool_result block to check them against: fail closed.
+    await expect(run("end_turn", '[{"name":"SAMPLE X","sourceUrl":"https://example.com/x"}]')).rejects.toMatchObject({
+      code: "no_evidence",
+      retryable: false,
+    });
   });
 });

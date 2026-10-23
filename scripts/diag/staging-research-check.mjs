@@ -10,18 +10,20 @@ page.on("response", (r) => {
   if (r.request().method() === "POST") console.log(`POST ${r.url()} -> ${r.status()}`);
 });
 const url = `${base}/projects?q=${encodeURIComponent(q)}`;
-const text = async () => (await page.locator("main").innerText().catch(() => page.locator("body").innerText())).replace(/\n{2,}/g, "\n").slice(0, 2500);
+const text = async () => (await page.locator("body").innerText()).replace(/\n{2,}/g, "\n").slice(0, 2500);
 
-await page.goto(url, { waitUntil: "networkidle" });
+await page.goto(url, { waitUntil: "load", timeout: 60_000 });
 await page.waitForTimeout(8000);
-console.log("=== first load ===\n" + (await text()));
+const first = await text();
+console.log("sample banner shown:", /Sample data/.test(first));
+console.log("=== first load ===\n" + first.replace(/^[\s\S]*?Search\n/, ""));
 await page.screenshot({ path: "shot-0.png", fullPage: true });
 for (let i = 1; i <= 9; i++) {
   await page.waitForTimeout(60_000);
-  await page.goto(url, { waitUntil: "networkidle" });
+  await page.goto(url, { waitUntil: "load", timeout: 60_000 });
   await page.waitForTimeout(5000);
   const t = await text();
-  console.log(`=== reload ${i} ===\n` + t.slice(0, 1200));
+  console.log(`=== reload ${i} ===\n` + t.replace(/^[\s\S]*?Search\n/, "").slice(0, 1500));
   if (/^\s*[1-9]\d* results?/m.test(t)) {
     await page.screenshot({ path: "shot-final.png", fullPage: true });
     break;

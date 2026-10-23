@@ -35,9 +35,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - run: npm i --no-save --no-package-lock @playwright/test@1.56.1 && npx playwright install --with-deps chromium
+      - name: Install Playwright outside the repo
+        run: |
+          cd "$RUNNER_TEMP" && npm init -y >/dev/null && npm i @playwright/test@1.56.1 >/dev/null
+          npx playwright install --with-deps chromium >/dev/null
+          cp "$GITHUB_WORKSPACE/scripts/diag/staging-research-check.mjs" .
       - name: Real search on staging
-        run: node scripts/diag/staging-research-check.mjs
+        run: |
+          cd "$RUNNER_TEMP"
+          QUERY="$(head -n1 "$GITHUB_WORKSPACE/scripts/diag/query.txt")" node staging-research-check.mjs
+          cp shot-*.png "$GITHUB_WORKSPACE/" || true
       - name: Cloud Run research logs
         if: always()
         run: |

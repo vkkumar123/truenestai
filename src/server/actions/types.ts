@@ -12,6 +12,10 @@ export type AdminLoginState =
   | { status: "idle" }
   | { status: "error"; message: string };
 
+export type SetPasswordState =
+  | { status: "idle" }
+  | { status: "error"; message: string; linkInvalid?: boolean };
+
 export type UpdateLeadStatusState =
   | { status: "idle" }
   | { status: "success"; leadId: string; leadStatus: string; message: string }

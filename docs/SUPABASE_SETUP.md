@@ -37,8 +37,12 @@ The service-role/secret key and `SUPABASE_DB_URL` must never get a `NEXT_PUBLIC_
    - **Site URL**: the deployed origin, e.g. `https://<your-domain>` (staging: its own origin).
    - **Redirect URLs** (allow list): `https://<your-domain>/admin/login` and, for local work,
      `http://localhost:3000/admin/login`. Do not add wildcards for other domains.
-3. Authentication → Emails: invites are sent by Supabase's built-in mailer, which is heavily rate-limited;
-   configure custom SMTP before inviting more than a couple of staff.
+3. Authentication → Emails: invites are sent by Supabase's built-in mailer, which is heavily rate-limited and
+   only delivers to members of your Supabase organization (other addresses, including Gmail `+` aliases,
+   silently get nothing). Configure custom SMTP before inviting other staff.
+   Invite and password-reset links land on `/admin/login`, which forwards them to `/admin/set-password`
+   (the staff member chooses a password there, at least 12 characters), so only `/admin/login` needs to be
+   in the redirect allow list.
 4. Optional hardening: enable leaked-password protection and a minimum password length ≥ 12.
 
 ## 4. Data API and Storage checks

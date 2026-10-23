@@ -51,6 +51,13 @@ describe("src/proxy.ts (fast-path admin guard)", () => {
     expect((await proxy(req("/admin/login"), FIXTURE_ENV)).headers.get("location")).toBeNull();
   });
 
+  it("lets the set-password page through without a session (invite links have none yet)", async () => {
+    expect((await proxy(req("/admin/set-password"), SUPA_ENV)).headers.get("location")).toBeNull();
+    expect((await proxy(req("/admin/set-password/"), SUPA_ENV)).headers.get("location")).toBeNull();
+    expect((await proxy(req("/admin/set-password-x"), SUPA_ENV)).status).toBe(307);
+    expect(ssr.calls).toBe(0);
+  });
+
   it("lets requests with a fixture or Supabase session cookie through (pages still verify)", async () => {
     expect((await proxy(req("/admin/leads", `${STAFF_SESSION_COOKIE}=anything`), FIXTURE_ENV)).headers.get("location")).toBeNull();
     expect((await proxy(req("/admin/leads", "sb-abcd-auth-token.0=x"), FIXTURE_ENV)).headers.get("location")).toBeNull();

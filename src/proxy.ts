@@ -13,6 +13,8 @@ import { createServerClient } from "@supabase/ssr";
 /** Must equal FIXTURE_SESSION_COOKIE in src/server/auth.ts (asserted by a unit test). */
 export const STAFF_SESSION_COOKIE = "tn_staff_session";
 export const ADMIN_LOGIN_PATH = "/admin/login";
+/** Invite / password-reset links land here with tokens in the URL fragment; no session yet. */
+export const ADMIN_SET_PASSWORD_PATH = "/admin/set-password";
 
 /** Supabase SSR auth cookies: "sb-<ref>-auth-token" (optionally chunked: ".0", ".1", ...). */
 const SUPABASE_AUTH_COOKIE = /^sb-[A-Za-z0-9-]+-auth-token(\.\d+)?$/;
@@ -27,6 +29,10 @@ export function hasSupabaseAuthCookie(names: string[]): boolean {
 
 export function isAdminLoginPath(pathname: string): boolean {
   return pathname === ADMIN_LOGIN_PATH || pathname === `${ADMIN_LOGIN_PATH}/`;
+}
+
+export function isAdminSetPasswordPath(pathname: string): boolean {
+  return pathname === ADMIN_SET_PASSWORD_PATH || pathname === `${ADMIN_SET_PASSWORD_PATH}/`;
 }
 
 function loginRedirect(request: NextRequest): NextResponse {
@@ -88,6 +94,7 @@ export async function handleAdminRequest(request: NextRequest, env: NodeJS.Proce
     // Keep a live Supabase session fresh on the login page too (it redirects signed-in staff).
     return cfg && hasSupabaseAuthCookie(names) ? (await refreshSupabaseSession(request, cfg)).response : NextResponse.next();
   }
+  if (isAdminSetPasswordPath(pathname)) return NextResponse.next(); // the page itself checks the link
   if (!hasStaffSessionCookie(names)) return loginRedirect(request);
   if (!cfg || !hasSupabaseAuthCookie(names)) return NextResponse.next();
 

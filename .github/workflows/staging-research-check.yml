@@ -1,0 +1,50 @@
+name: Staging research check (diagnostic)
+
+on:
+  push:
+    branches: [diag/staging-research-check]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    environment: staging
+    timeout-minutes: 20
+    env:
+      STAGING_URL: https://truenest-staging-vcw4w2djua-el.a.run.app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/590863383772/locations/global/workloadIdentityPools/github/providers/truenestai
+          service_account: truenest-deployer@truenestai.iam.gserviceaccount.com
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Staging service config (names only, no values)
+        run: |
+          gcloud run services describe truenest-staging --region asia-south1 --project truenestai --format=json \
+            | jq '{image: .spec.template.spec.containers[0].image, env: [.spec.template.spec.containers[0].env[] | {name, plain: (.value != null), secret: .valueFrom.secretKeyRef.name}]}' \
+            | jq 'walk(if type=="object" and has("plain") and .plain then {name, plain} else . end)'
+          gcloud scheduler jobs describe truenest-staging-research --location asia-south1 --project truenestai --format='value(state,schedule,lastAttemptTime,status)' || true
+      - name: Plain env values that are not secrets
+        run: |
+          gcloud run services describe truenest-staging --region asia-south1 --project truenestai --format=json \
+            | jq -r '.spec.template.spec.containers[0].env[] | select(.value != null) | select(.name | test("BACKEND|ENV|RESEARCH_|SOURCE|NODE_ENV|APP_")) | "\(.name)=\(.value)"'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm i --no-save --no-package-lock @playwright/test@1.56.1 && npx playwright install --with-deps chromium
+      - name: Real search on staging
+        run: node scripts/diag/staging-research-check.mjs
+      - name: Cloud Run research logs
+        if: always()
+        run: |
+          gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="truenest-staging" AND (textPayload:"research" OR jsonPayload.msg:"research" OR textPayload:"search." OR jsonPayload.event:"research")' \
+            --project truenestai --freshness=2h --limit 60 --format='value(timestamp,textPayload,jsonPayload)' || echo "no log access"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshots
+          path: shot-*.png

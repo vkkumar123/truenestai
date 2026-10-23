@@ -221,8 +221,7 @@ export function validateCandidates(candidates: readonly unknown[], evidence: Res
     if (new Set(cited.flatMap(reraTokens)).size > 1) return inc(dropped, "multiple_projects");
 
     // Every fact must sit in the same citation as the name, within FACT_WINDOW characters of it.
-    // A page whose returned title names the project is about that project, so then any of its
-    // citations may carry the facts.
+    // A page whose returned title names the project is about that project (title-only mode below).
     const nameWins = cited.flatMap((t) => nameWindows(c.name, t));
     // Title-only mode needs a specific name: at least two words, and not the developer's own name
     // (a developer page titled "Acme Developers" says nothing about one project).

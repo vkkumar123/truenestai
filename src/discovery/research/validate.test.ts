@@ -212,21 +212,47 @@ describe("M1: facts must be cited next to the candidate's name", () => {
     expect(otherPage.dropped).toEqual({ locality_not_cited: 1 });
   });
 
-  it("uses the page title the search tool returned as evidence for the name and locality", () => {
+  it("uses the page title the search tool returned as evidence for the name, locality and developer", () => {
     const ev = extractEvidence([
       fakeSearchResult([{ url: URL_A, title: `SAMPLE Alpha Homes | Apartments in ${LOC.name}` }]),
       fakeCitedText("prose", [{ url: URL_A, citedText: "3 BHK homes by SAMPLE Builder Co. Price ₹ 95 Lakh onwards." }]),
     ]);
     const r = validateCandidates([{ ...good, address: null, reraNumbers: [] }], ev);
     expect(r.accepted).toHaveLength(1);
-    expect(r.accepted[0]).toMatchObject({ title: "SAMPLE Alpha Homes", localityId: LOC.id, developerName: "SAMPLE Builder Co", priceText: "₹ 95 Lakh onwards" });
-    // A fact that is on no citation of that page is still dropped.
-    const r2 = validateCandidates([{ ...good, address: null, reraNumbers: [], priceText: "₹ 80 Lakh onwards" }], ev);
-    expect(r2.accepted[0].priceText).toBeNull();
-    expect(r2.fieldsDropped).toMatchObject({ priceText: 1 });
+    expect(r.accepted[0]).toMatchObject({ title: "SAMPLE Alpha Homes", localityId: LOC.id, developerName: "SAMPLE Builder Co" });
+    // Price and RERA numbers still need the name's own window, which a title-only match lacks.
+    expect(r.accepted[0].priceText).toBeNull();
+    expect(r.fieldsDropped).toEqual({ priceText: 1 });
     // A title that does not name the project is not evidence for it.
     const r3 = validateCandidates([{ ...good, name: "SAMPLE Beta Towers", address: null }], ev);
     expect(r3.dropped).toEqual({ name_not_cited: 1 });
+  });
+
+  it("never takes another project's RERA number or price from a page matched only by its title", () => {
+    const ev = extractEvidence([
+      fakeSearchResult([{ url: URL_A, title: `SAMPLE Alpha Homes | ${LOC.name}` }]),
+      fakeCitedText("prose", [
+        { url: URL_A, citedText: `Also see SAMPLE Beta Towers in ${LOC.name}: RERA No. PRM/KA/RERA/1251/309/PR/000002, ₹ 1.2 Cr onwards.` },
+      ]),
+    ]);
+    const r = validateCandidates(
+      [{ ...good, address: null, developerName: null, reraNumbers: ["PRM/KA/RERA/1251/309/PR/000002"], priceText: "₹ 1.2 Cr onwards" }],
+      ev,
+    );
+    expect(r.accepted).toHaveLength(1);
+    expect(r.accepted[0]).toMatchObject({ title: "SAMPLE Alpha Homes", reraNumber: null, reraNumbers: [], priceText: null });
+    expect(r.fieldsDropped).toEqual({ reraNumbers: 1, priceText: 1 });
+  });
+
+  it("rejects a title-only match when the name is the developer's name or a single word", () => {
+    const ev = extractEvidence([
+      fakeSearchResult([{ url: URL_A, title: `SAMPLE Builder Co | Projects in ${LOC.name}` }]),
+      fakeCitedText("prose", [{ url: URL_A, citedText: "Homes across the city." }]),
+    ]);
+    const asDeveloper = validateCandidates([{ ...good, name: "SAMPLE Builder Co", address: null, reraNumbers: [], priceText: null }], ev);
+    expect(asDeveloper.dropped).toEqual({ name_not_cited: 1 });
+    const oneWord = validateCandidates([{ ...good, name: "Projects", developerName: null, address: null, reraNumbers: [], priceText: null }], ev);
+    expect(oneWord.dropped).toEqual({ name_not_cited: 1 });
   });
 
   it("treats '&' and 'and' as the same word in names", () => {

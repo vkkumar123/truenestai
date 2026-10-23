@@ -5,7 +5,8 @@
 // in this response's web search results. The model's own "quote" is never trusted as evidence.
 // The name must be in a citation or the page title. Facts (developer, address, price, RERA) must
 // sit in a citation within FACT_WINDOW characters of the name; when the name is only in the page
-// title (the page is about that project), any citation of that page counts. The locality must map
+// title (the page is about that project), any citation of that page may carry the developer and
+// address, but RERA numbers and price still need the name's window, so they are dropped. The locality must map
 // to exactly one active configured locality (src/config/markets alias matching) and appear in that
 // page's citations or title. Anything else is dropped and counted.
 import { z } from "zod";
@@ -222,10 +223,20 @@ export function validateCandidates(candidates: readonly unknown[], evidence: Res
     // Every fact must sit in the same citation as the name, within FACT_WINDOW characters of it.
     // A page whose returned title names the project is about that project, so then any of its
     // citations may carry the facts.
-    let windows = cited.flatMap((t) => nameWindows(c.name, t));
-    if (!windows.length && title && citedPhrase(c.name, title)) windows = cited;
-    if (!windows.length && !(title && citedPhrase(c.name, title))) return inc(dropped, "name_not_cited");
-    const isCited = (check: (v: string, t: string) => boolean, v: string) => windows.some((w) => check(v, w));
+    const nameWins = cited.flatMap((t) => nameWindows(c.name, t));
+    // Title-only mode needs a specific name: at least two words, and not the developer's own name
+    // (a developer page titled "Acme Developers" says nothing about one project).
+    const titleOnly =
+      !nameWins.length &&
+      !!title &&
+      citedPhrase(c.name, title) &&
+      words(c.name).trim().split(" ").length >= 2 &&
+      !(c.developerName && citedPhrase(c.name, c.developerName));
+    if (!nameWins.length && !titleOnly) return inc(dropped, "name_not_cited");
+    // Developer and address may come from any citation of a page titled with the project; RERA
+    // numbers and price always need the name's own window (a page can quote another project's).
+    const pageWins = titleOnly ? cited : nameWins;
+    const isCited = (check: (v: string, t: string) => boolean, v: string, wins = pageWins) => wins.some((w) => check(v, w));
 
     // Locality from the stated locality first, then the address.
     let loc = matchLocality(c.localityText);
@@ -237,19 +248,19 @@ export function validateCandidates(candidates: readonly unknown[], evidence: Res
     const pageText = [title, ...cited];
     if (!localityTerms(locality).some((t) => pageText.some((x) => citedPhrase(t, x)))) return inc(dropped, "locality_not_cited");
 
-    const keep = (field: FieldName, v: string | null, check: (v: string, t: string) => boolean): string | null => {
+    const keep = (field: FieldName, v: string | null, check: (v: string, t: string) => boolean, wins = pageWins): string | null => {
       if (!v) return null;
-      if (isCited(check, v)) return v;
+      if (isCited(check, v, wins)) return v;
       inc(fieldsDropped, field);
       return null;
     };
     const developerName = keep("developerName", c.developerName, citedPhrase);
     const address = keep("address", c.address, citedPhrase);
-    const priceText = keep("priceText", c.priceText, citedPrice);
+    const priceText = keep("priceText", c.priceText, citedPrice, nameWins);
     const reraNumbers: string[] = [];
     for (const r of c.reraNumbers) {
       const v = r.trim();
-      if (v && isCited(citedRera, v)) {
+      if (v && isCited(citedRera, v, nameWins)) {
         if (!reraNumbers.some((x) => normaliseRera(x) === normaliseRera(v))) reraNumbers.push(v);
       } else inc(fieldsDropped, "reraNumbers");
     }

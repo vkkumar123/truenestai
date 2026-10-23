@@ -14,7 +14,8 @@ resource "google_cloud_run_v2_service" "app" {
   template {
     service_account                  = google_service_account.runtime[each.key].email
     max_instance_request_concurrency = 80
-    timeout                          = "30s"
+    # Research jobs triggered by Cloud Scheduler can take ~120 s.
+    timeout = "300s"
 
     scaling {
       min_instance_count = each.value.min_instances
@@ -50,7 +51,8 @@ resource "google_cloud_run_v2_service" "app" {
 
       dynamic "env" {
         for_each = each.value.secrets_ready ? {
-          for k, s in local.env_secrets : s.var_name => s.secret_id if s.env == each.key
+          for k, s in local.env_secrets : s.var_name => s.secret_id
+          if s.env == each.key && (!s.research || each.value.research_ready)
         } : {}
         content {
           name = env.key

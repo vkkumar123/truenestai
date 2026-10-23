@@ -13,12 +13,27 @@ locals {
     }
   }
 
-  env_secrets = merge([
-    for env, cfg in var.environments : {
-      for var_name, suffix in local.runtime_secrets[cfg.data_backend] :
-      "${env}/${var_name}" => { env = env, var_name = var_name, secret_id = "truenest-${env}-${suffix}" }
-    }
-  ]...)
+  # On-demand research (search miss -> research -> save). Created with the supabase secrets, wired
+  # into Cloud Run only once research_ready is true.
+  research_secrets = {
+    ANTHROPIC_API_KEY   = "anthropic-api-key"
+    RESEARCH_RUN_SECRET = "research-run-secret"
+  }
+
+  env_secrets = merge(
+    merge([
+      for env, cfg in var.environments : {
+        for var_name, suffix in local.runtime_secrets[cfg.data_backend] :
+        "${env}/${var_name}" => { env = env, var_name = var_name, secret_id = "truenest-${env}-${suffix}", research = false }
+      }
+    ]...),
+    merge([
+      for env, cfg in var.environments : {
+        for var_name, suffix in local.research_secrets :
+        "${env}/${var_name}" => { env = env, var_name = var_name, secret_id = "truenest-${env}-${suffix}", research = true }
+      } if cfg.data_backend == "supabase"
+    ]...),
+  )
 }
 
 resource "google_secret_manager_secret" "runtime" {

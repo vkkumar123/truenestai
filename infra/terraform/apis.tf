@@ -1,6 +1,7 @@
 locals {
   services = [
     "run.googleapis.com",
+    "cloudscheduler.googleapis.com",
     "artifactregistry.googleapis.com",
     "secretmanager.googleapis.com",
     "iam.googleapis.com",

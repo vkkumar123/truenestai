@@ -1,0 +1,38 @@
+name: Staging smoke
+
+# Live end-to-end checks against the deployed staging service (real data; may start one
+# paid research job). Runs on demand and on pushes to smoke/** branches.
+on:
+  workflow_dispatch:
+    inputs:
+      query:
+        description: Search text to research
+        required: false
+        default: Assetz
+  push:
+    branches: ["smoke/**"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: Staging research smoke (Playwright)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      STAGING_URL: https://truenest-staging-vcw4w2djua-el.a.run.app
+      SMOKE_QUERY: ${{ github.event.inputs.query || 'Assetz' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test -c playwright.staging.config.ts

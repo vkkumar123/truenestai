@@ -4,7 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
-const { FACT_ATTRIBUTES, mapFactsCurrentRow, resolveFactsCurrent } = await import("./fact-store");
+const { FACT_ATTRIBUTES, mapFactsCurrentRow, resolveFactsCurrent, tryIsoDate } = await import("./fact-store");
+const { WEB_RESEARCH_SOURCE_IDS } = await import("@/discovery/registry");
 const { FixtureFactStoreRepository, SAMPLE_FACT_OBSERVATIONS } = await import("./fixture/fact-store");
 const { SupabaseFactStoreRepository } = await import("./supabase/fact-store");
 const { createFixtureRepositories, SAMPLE_PROJECTS } = await import("./fixture");
@@ -56,6 +57,14 @@ describe("attribute catalogue", () => {
     expect(fromSql).toHaveLength(39);
     expect(fromSql).toEqual(FACT_ATTRIBUTES.map((x) => ({ ...x })));
   });
+
+  it("H1: tn_is_web_research_source lists exactly WEB_RESEARCH_SOURCE_IDS", () => {
+    const sql = readFileSync(MIGRATION, "utf8");
+    const m = sql.match(/tn_is_web_research_source\(p_id text\)[\s\S]*?select p_id in \(([^)]*)\)/);
+    expect(m).not.toBeNull();
+    const ids = m![1].split(",").map((x) => x.trim().replace(/^'|'$/g, ""));
+    expect(ids.sort()).toEqual([...WEB_RESEARCH_SOURCE_IDS].sort());
+  });
 });
 
 describe("resolveFactsCurrent (TS mirror of the facts_current view)", () => {
@@ -73,6 +82,21 @@ describe("resolveFactsCurrent (TS mirror of the facts_current view)", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ fact_id: "rera", conflict_count: 2, has_disagreement: true, is_stale: true }); // verified 2026-10-01 + 168 h < now
     expect(rows[0].conflicts.map((c) => c.fact_id)).toEqual(["builder", "est"]);
+  });
+
+  it("M5: a reviewed curated UNKNOWN never overrides a known observation", () => {
+    const curated = cand({ fact_id: "cur", origin: "curated", value_date: null, truth_status: "unknown", verification: "reviewed", added_by: "staff", source_url: null });
+    const row = resolveFactsCurrent([curated, cand({ fact_id: "obs" })], now)[0];
+    expect(row.fact_id).toBe("obs");
+    expect(row.conflicts.map((x) => x.fact_id)).toEqual(["cur"]);
+  });
+
+  it("L2: in a date attribute, an ISO date held as text is not a disagreement with the same date", () => {
+    const curated = cand({ fact_id: "cur", origin: "curated", value_date: null, value_text: "2026-12-31", added_by: "staff" });
+    expect(resolveFactsCurrent([cand({ fact_id: "obs" }), curated], now)[0].has_disagreement).toBe(false);
+    expect(resolveFactsCurrent([cand({ fact_id: "obs" }), { ...curated, value_text: "2026-12 (SAMPLE)" }], now)[0].has_disagreement).toBe(true);
+    expect(tryIsoDate("2026-02-30")).toBeNull();
+    expect(tryIsoDate("2026-02-28")).toBe("2026-02-28");
   });
 
   it("a curated value wins only once source_confirmed or reviewed", () => {
@@ -127,11 +151,15 @@ describe("mapFactsCurrentRow", () => {
     expect(f).toMatchObject({ entityType: "project", attribute: "promised_possession", origin: "observation", sourceType: "builder", isSample: true });
   });
 
-  it("unknown carries no value; estimates keep a well-formed basis", () => {
+  it("unknown carries no value; estimates keep a well-formed basis and are refused without one (M2)", () => {
     expect(mapFactsCurrentRow(view({ truth_status: "unknown", value_date: null })).fact).toMatchObject({ status: "unknown", value: null, truth: "unknown" });
-    const basis = { sources: [{ sourceId: "sample-feed", url: "https://example.com/sample/x", observedAt: "2026-10-01T00:00:00Z" }], signalCount: 3 };
-    expect(mapFactsCurrentRow(view({ truth_status: "estimated", estimate_basis: basis })).fact.estimateBasis).toEqual(basis);
-    expect(mapFactsCurrentRow(view({ truth_status: "estimated", estimate_basis: { bogus: 1 } })).fact.estimateBasis).toBeUndefined();
+    const basis = { sources: [{ sourceId: "sample-feed", url: "https://example.com/sample/x", observedAt: "2026-10-01 00:00:00+00" }], signalCount: 3 };
+    expect(mapFactsCurrentRow(view({ truth_status: "estimated", estimate_basis: basis })).fact.estimateBasis).toEqual({
+      sources: [{ sourceId: "sample-feed", url: "https://example.com/sample/x", observedAt: "2026-10-01T00:00:00.000Z" }],
+      signalCount: 3,
+    });
+    expect(() => mapFactsCurrentRow(view({ truth_status: "estimated", estimate_basis: { bogus: 1 } }))).toThrow();
+    expect(() => mapFactsCurrentRow(view({ truth_status: "estimated", estimate_basis: null }))).toThrow();
   });
 
   it("rejects malformed rows", () => {
@@ -172,6 +200,21 @@ describe("FixtureFactStoreRepository", () => {
     const later = new FixtureFactStoreRepository(SAMPLE_PROJECTS, undefined, () => new Date("2026-10-20T00:00:00Z"));
     expect((await later.getCurrent("project", LAKEVIEW, "oc_status"))?.isStale).toBe(true);
     expect(await later.getCurrent("project", LAKEVIEW, "khata_type")).toBeNull();
+  });
+
+  it("H1 / M2 / M3 in the fixture: web search is estimated/search; sourceless known values are left out", async () => {
+    const lake = SAMPLE_PROJECTS.find((p) => p.id === LAKEVIEW)!;
+    const at = "2026-10-01T00:00:00.000Z";
+    const withSources = (sources: { sourceId: string; url: string; observedAt: string }[], value: string | null = "2027-12 (SAMPLE)") =>
+      [{ ...lake, declaredPossession: { status: value === null ? "unknown" : "known", value, verification: "unverified", sources } as typeof lake.declaredPossession }];
+    const pick = async (projects: typeof SAMPLE_PROJECTS) =>
+      (await new FixtureFactStoreRepository(projects, [], () => new Date(at)).listCurrent("project", LAKEVIEW))[0];
+    const web = await pick(withSources([{ sourceId: "anthropic-web-search", url: "https://example.com/sample/web", observedAt: at }]));
+    expect(web).toMatchObject({ origin: "curated", sourceType: "search" });
+    expect(web.fact.truth).toBe("estimated");
+    expect(web.fact.estimateBasis?.sources.map((s) => s.sourceId)).toEqual(["anthropic-web-search"]);
+    expect(await pick(withSources([]))).toBeUndefined();
+    expect((await pick(withSources([], null)))?.fact.truth).toBe("unknown");
   });
 
   it("other entities only see their own curated facts; inputs are validated", async () => {

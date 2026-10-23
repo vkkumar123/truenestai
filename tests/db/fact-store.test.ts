@@ -58,21 +58,33 @@ d("fact store (0006)", () => {
       insert into developers (id, name, is_sample) values ('d1', 'SAMPLE Developer A', true);
       insert into projects (id, slug, name, developer_id, locality_id, lat, lng, location_precision, is_sample)
         values ('p1', 'sample-p1', 'SAMPLE P1', 'd1', 'hebbal', 13.03, 77.59, 'locality_centroid', true),
-               ('p2', 'sample-p2', 'SAMPLE P2', 'd1', 'hebbal', 13.03, 77.59, 'locality_centroid', true);
+               ('p2', 'sample-p2', 'SAMPLE P2', 'd1', 'hebbal', 13.03, 77.59, 'locality_centroid', true),
+               ('p3', 'sample-p3', 'SAMPLE P3', 'd1', 'hebbal', 13.03, 77.59, 'locality_centroid', true),
+               ('p4', 'p4-not-sample', 'P4 (test, not flagged sample)', 'd1', 'hebbal', 13.03, 77.59, 'locality_centroid', false);
       insert into sources (id, name, type, status, access_method, homepage) values
         ('sample-feed', 'SAMPLE Feed', 'fixture', 'approved', 'fixture', 'https://example.com/'),
         ('sample-builder', 'SAMPLE Builder Site', 'developer', 'proposed', 'manual', 'https://example.com/'),
         ('sample-regulator', 'SAMPLE Regulator', 'regulator', 'proposed', 'link_out_only', 'https://example.org/'),
-        ('sample-news', 'SAMPLE News', 'news', 'proposed', 'manual', 'https://example.org/');
+        ('sample-news', 'SAMPLE News', 'news', 'proposed', 'manual', 'https://example.org/'),
+        ('sample-rejected-dev', 'SAMPLE Rejected Builder', 'developer', 'rejected', 'manual', 'https://example.com/');
+      insert into sources (id, name, type, status, access_method, homepage, terms_reviewed_at) values
+        ('anthropic-web-search', 'Web research', 'developer', 'approved', 'api', 'https://www.anthropic.com/', '2026-10-22');
       insert into staff_profiles (user_id, role) values ('${STAFF_UID}', 'admin');
       -- pre-0006 curated facts: one per backfill rule
       insert into facts (id, project_id, field, value, status, verification) values
         ('f-dev',  'p2', 'declared_possession', '"2027-03 (SAMPLE)"', 'known', 'unverified'),
         ('f-news', 'p2', 'address', '"SAMPLE Road 2"', 'known', 'unverified'),
-        ('f-unk',  'p2', 'construction_status', null, 'unknown', 'unverified');
+        ('f-unk',  'p2', 'construction_status', null, 'unknown', 'unverified'),
+        ('f-web',  'p2', 'rera_numbers', '["SAMPLE-RERA-9"]', 'known', 'unverified'),
+        ('f-rej',  'p3', 'address', '"SAMPLE Road 3"', 'known', 'unverified'),
+        ('f-two',  'p3', 'declared_possession', '"2027-06-30"', 'known', 'unverified');
       insert into fact_sources (fact_id, source_id, url, observed_at) values
         ('f-dev',  'sample-builder', 'https://example.com/sample/p2', '2026-08-01T00:00:00Z'),
-        ('f-news', 'sample-news', 'https://example.org/sample/p2', '2026-08-02T00:00:00Z');
+        ('f-news', 'sample-news', 'https://example.org/sample/p2', '2026-08-02T00:00:00Z'),
+        ('f-web',  'anthropic-web-search', 'https://example.com/sample/p2/web', '2026-08-03T00:00:00Z'),
+        ('f-rej',  'sample-rejected-dev', 'https://example.com/sample/p3', '2026-08-04T00:00:00Z'),
+        ('f-two',  'sample-builder', 'https://example.com/sample/p3/brochure', '2026-08-01T00:00:00Z'),
+        ('f-two',  'sample-news', 'https://example.org/sample/p3/news', '2026-09-01T00:00:00Z');
     `);
     await c.query(readFileSync(files[last], "utf8"));
   });
@@ -82,13 +94,55 @@ d("fact store (0006)", () => {
 
   it("backfills curated facts: developer/regulator/government → official, other → estimated, unknown stays unknown", async () => {
     const { rows } = await c.query(
-      "select id, truth_status, last_verified_at::text as lv, ttl_hours from facts where project_id = 'p2' order by id",
+      "select id, truth_status, last_verified_at::text as lv, ttl_hours from facts where project_id in ('p2','p3') order by id",
     );
     expect(rows).toEqual([
       { id: "f-dev", truth_status: "official", lv: "2026-08-01 00:00:00+00", ttl_hours: null },
       { id: "f-news", truth_status: "estimated", lv: "2026-08-02 00:00:00+00", ttl_hours: null },
+      { id: "f-rej", truth_status: "estimated", lv: "2026-08-04 00:00:00+00", ttl_hours: null }, // L3: rejected source
+      { id: "f-two", truth_status: "official", lv: "2026-09-01 00:00:00+00", ttl_hours: null },
       { id: "f-unk", truth_status: "unknown", lv: null, ttl_hours: null },
+      { id: "f-web", truth_status: "estimated", lv: "2026-08-03 00:00:00+00", ttl_hours: null }, // H1: web search
     ]);
+  });
+
+  it("H1: a curated fact whose only source is web search is estimated / search, with its basis", async () => {
+    const SRC = JSON.stringify([{ sourceId: "anthropic-web-search", url: "https://example.com/sample/p1/web", observedAt: "2026-10-01T00:00:00Z" }]);
+    const r = await asRole(c, "service_role", null, async (q) => {
+      await q.query(
+        "select public.research_set_fact('p1', 'declared_possession', 'known', '\"2027-12 (SAMPLE)\"', 'unverified', $1, $2, 'admin')",
+        [SRC, STAFF_UID],
+      );
+      return (await q.query(
+        "select truth_status, source_id, source_type, estimate_basis from facts_current where entity_id = 'p1' and attribute = 'promised_possession'",
+      )).rows;
+    });
+    expect(r).toHaveLength(1);
+    expect(r[0]).toMatchObject({ truth_status: "estimated", source_id: "anthropic-web-search", source_type: "search" });
+    expect(r[0].estimate_basis.sources).toHaveLength(1);
+    expect(r[0].estimate_basis.sources[0]).toMatchObject({ sourceId: "anthropic-web-search", url: "https://example.com/sample/p1/web" });
+    // and the mapper accepts it as a well-formed estimate
+    const row = (await asRole(c, "service_role", null, async (q) => {
+      await q.query(
+        "select public.research_set_fact('p1', 'declared_possession', 'known', '\"2027-12 (SAMPLE)\"', 'unverified', $1, $2, 'admin')",
+        [SRC, STAFF_UID],
+      );
+      return (await q.query("select to_jsonb(f) as j from facts_current f where entity_id = 'p1'")).rows[0].j;
+    }));
+    expect(mapFactsCurrentRow(row).fact.estimateBasis?.sources[0].sourceId).toBe("anthropic-web-search");
+  });
+
+  it("M3: the representative source of a curated fact is the official-qualifying one, even when older", async () => {
+    const r = await asRole(c, "service_role", null, async (q) => ({
+      current: (await q.query("select truth_status, source_id, source_type, value_date::text, value_text from facts_current where entity_id = 'p3'")).rows,
+      history: await (async () => {
+        await q.query("update facts set is_current = false where id = 'f-two'");
+        return (await q.query("select source_id, source_type from facts_history where fact_id = 'f-two'")).rows;
+      })(),
+    }));
+    // L2: the ISO date text is served as a date
+    expect(r.current).toEqual([{ truth_status: "official", source_id: "sample-builder", source_type: "builder", value_date: "2027-06-30", value_text: null }]);
+    expect(r.history).toEqual([{ source_id: "sample-builder", source_type: "builder" }]);
   });
 
   it("seeds the spec 02 attribute catalogue (metadata only) with proposed legal flags", async () => {
@@ -125,8 +179,26 @@ d("fact store (0006)", () => {
       const ins = obs({ added_by: "staff" });
       expect((await errorAs(c, role, sub, ins.sql, ins.params))?.code).toBe("42501");
     }
-    // the catalogue is migration-managed: service role reads it but cannot change it
-    expect((await errorAs(c, "service_role", null, "update fact_attributes set default_ttl_hours = 1"))?.code).toBe("42501");
+    // H4: Supabase's default ALL grant to service_role is revoked; only the explicit grants remain.
+    // The catalogue is migration-managed: service role reads it but cannot change it.
+    for (const sql of [
+      "update fact_attributes set default_ttl_hours = 1",
+      "insert into fact_attributes (entity_type, attribute, value_kind, default_ttl_hours) values ('project', 'x_new', 'text', 1)",
+      "delete from fact_attributes",
+      "insert into fact_observations_history (observation_id, entity_type, entity_id, attribute, status, source_id, source_type, observed_at, last_verified_at, ttl_hours, added_by, verification, is_sample, created_at, updated_at, operation) values ('forged', 'project', 'p1', 'oc_status', 'unknown', 'sample-feed', 'search', now(), now(), 1, 'staff', 'unverified', true, now(), now(), 'UPDATE')",
+    ]) {
+      expect((await errorAs(c, "service_role", null, sql))?.code, sql).toBe("42501");
+    }
+    const priv = (await c.query(
+      "select table_name, string_agg(privilege_type, ',' order by privilege_type) as p from information_schema.role_table_grants where grantee = 'service_role' and table_name in ('fact_attributes','fact_observations','fact_observations_history','facts_current','facts_history') group by 1 order by 1",
+    )).rows;
+    expect(priv).toEqual([
+      { table_name: "fact_attributes", p: "SELECT" },
+      { table_name: "fact_observations", p: "DELETE,INSERT,SELECT,UPDATE" },
+      { table_name: "fact_observations_history", p: "SELECT" },
+      { table_name: "facts_current", p: "SELECT" },
+      { table_name: "facts_history", p: "SELECT" },
+    ]);
   });
 
   it("conflict: builder vs RERA possession dates are both kept; the newer official row wins and the other is in conflicts", async () => {
@@ -223,14 +295,14 @@ d("fact store (0006)", () => {
     ]);
   });
 
-  it("an automated row can never be inserted (or updated, or relabelled) as verified", async () => {
-    for (const addedBy of ["crawl", "research", "extraction"]) {
+  it("H3: no observation (automated or staff) can be inserted, updated or relabelled as verified", async () => {
+    for (const addedBy of ["crawl", "research", "extraction", "staff"]) {
       for (const v of ["source_confirmed", "reviewed", "disputed", "requires_professional_review"]) {
         const ins = obs({ added_by: addedBy, verification: v });
         expect((await errorAs(c, "service_role", null, ins.sql, ins.params))?.code, `${addedBy} ${v}`).toBe("23514");
       }
     }
-    const staff = obs({ added_by: "staff", verification: "reviewed" });
+    const staff = obs({ added_by: "staff" });
     expect(await errorAs(c, "service_role", null, staff.sql, staff.params)).toBeNull();
     const auto = obs();
     // inline the default (crawl) row as superuser setup SQL, then try to raise or relabel it
@@ -240,6 +312,42 @@ d("fact store (0006)", () => {
     });
     expect((await errorAs(c, "service_role", null, "update fact_observations set verification = 'reviewed'", [], setup))?.code).toBe("23514");
     expect((await errorAs(c, "service_role", null, "update fact_observations set added_by = 'staff'", [], setup))?.code).toBe("23514");
+    // L1: is_sample is immutable
+    expect((await errorAs(c, "service_role", null, "update fact_observations set is_sample = false", [], setup))?.code).toBe("23514");
+  });
+
+  it("M4 + L1: official needs an official source type; is_sample must equal the project's", async () => {
+    for (const st of ["news", "search", "reddit", "portal", "youtube", "google_reviews"]) {
+      const ins = obs({ source_type: st });
+      expect((await errorAs(c, "service_role", null, ins.sql, ins.params))?.code, st).toBe("23514");
+    }
+    for (const st of ["rera", "builder", "govt", "fixture"]) {
+      const ins = obs({ source_type: st });
+      expect(await errorAs(c, "service_role", null, ins.sql, ins.params), st).toBeNull();
+    }
+    const notSample = obs({ is_sample: "false" }); // p1 is a SAMPLE project
+    expect((await errorAs(c, "service_role", null, notSample.sql, notSample.params))?.code).toBe("23514");
+    const fakeSample = obs({ entity_id: "p4", is_sample: "true" }); // p4 is not
+    expect((await errorAs(c, "service_role", null, fakeSample.sql, fakeSample.params))?.code).toBe("23514");
+    const ok = obs({ entity_id: "p4", is_sample: "false" });
+    expect(await errorAs(c, "service_role", null, ok.sql, ok.params)).toBeNull();
+  });
+
+  it("M5: a reviewed curated UNKNOWN never overrides a known observation", async () => {
+    const r = await asRole(c, "service_role", null, async (q) => {
+      await q.query(obs().sql, obs().params);
+      const set = await q.query(
+        "select public.research_set_fact('p1', 'declared_possession', 'unknown', null, 'unverified', '[]', $1, 'admin') as r",
+        [STAFF_UID],
+      );
+      await q.query("select public.research_set_verification('p1', 'declared_possession', $1, 'unverified', 'reviewed', $2, 'admin', null)", [set.rows[0].r.fact_id, STAFF_UID]);
+      return (await q.query(
+        "select origin, value_date::text, conflicts from facts_current where entity_id = 'p1' and attribute = 'promised_possession'",
+      )).rows;
+    });
+    expect(r).toHaveLength(1);
+    expect(r[0]).toMatchObject({ origin: "observation", value_date: "2026-12-31" });
+    expect(r[0].conflicts.map((x: Record<string, unknown>) => [x.origin, x.truth_status, x.verification])).toEqual([["curated", "unknown", "reviewed"]]);
   });
 
   it("rejects values without provenance, estimates without a basis, long excerpts, wrong kinds and unknown entities", async () => {
@@ -308,6 +416,8 @@ d("fact store (0006)", () => {
         "delete from fact_observations_history",
         "truncate fact_observations_history",
         "truncate fact_observations",
+        "truncate facts cascade", // M1
+        "truncate fact_sources",  // M1
       ]) {
         await c.query("savepoint s");
         await expect(c.query(sql), sql).rejects.toThrow(/append-only/);
@@ -328,24 +438,40 @@ d("fact store (0006)", () => {
     ]) {
       expect((await errorAs(c, "service_role", null, sql))?.code, sql).toBe("42501");
     }
-    // allowed: supersede (is_current), verification, truth/TTL columns
+    // allowed: supersede (is_current), verification, last_verified_at, ttl_hours
     expect(await errorAs(c, "service_role", null,
-      "update facts set is_current = false, verification = 'reviewed', truth_status = 'official', ttl_hours = 24, last_verified_at = now() where id = 'f-dev'")).toBeNull();
-    expect((await errorAs(c, "service_role", null, "update facts set truth_status = 'official' where id = 'f-unk'"))?.code).toBe("23514");
+      "update facts set is_current = false, verification = 'reviewed', ttl_hours = 24, last_verified_at = now() where id = 'f-dev'")).toBeNull();
+    // H2: truth_status is set once, to the derived value only — never relabelled by hand
+    for (const sql of [
+      "update facts set truth_status = 'estimated' where id = 'f-dev'",  // official → estimated
+      "update facts set truth_status = 'official' where id = 'f-news'",  // estimated → official
+      "update facts set truth_status = null where id = 'f-dev'",
+    ]) {
+      expect((await errorAs(c, "service_role", null, sql))?.code, sql).toBe("42501");
+    }
+    const late = "insert into facts (id, project_id, field, value, status) values ('f-late', 'p4', 'address', '\"Test Road\"', 'known'); " +
+      "insert into fact_sources (fact_id, source_id, url, observed_at) values ('f-late', 'sample-news', 'https://example.org/sample/p4', now());";
+    expect((await errorAs(c, "service_role", null, "update facts set truth_status = 'official' where id = 'f-late'", [], late))?.code).toBe("42501");
+    expect(await errorAs(c, "service_role", null, "update facts set truth_status = 'estimated' where id = 'f-late'", [], late)).toBeNull();
     // superseded curated rows appear in facts_history; current ones in facts_current
     const r = await asRole(c, "service_role", null, async (q) => {
       await q.query("update facts set is_current = false where id = 'f-dev'");
       await q.query("insert into facts (id, project_id, field, value, status) values ('f-dev2', 'p2', 'declared_possession', '\"2027-09 (SAMPLE)\"', 'known')");
-      return {
-        history: (await q.query("select fact_id, attribute, legacy_field, value_text, operation, superseded_at is not null as has_ts from facts_history where origin = 'curated'")).rows,
-        current: (await q.query("select fact_id, truth_status, ttl_hours from facts_current where entity_id = 'p2'")).rows,
-      };
+      const history = (await q.query("select fact_id, attribute, legacy_field, value_text, operation, superseded_at is not null as has_ts from facts_history where origin = 'curated' and entity_id = 'p2'")).rows;
+      // M2: a known curated value without a source is not in facts_current …
+      const withoutSource = (await q.query("select fact_id from facts_current where entity_id = 'p2'")).rows;
+      await q.query("insert into fact_sources (fact_id, source_id, url, observed_at) values ('f-dev2', 'sample-news', 'https://example.org/sample/p2/news', '2026-10-01T00:00:00Z')");
+      // … and appears once it has one (estimated, with that source as its basis)
+      const withSource = (await q.query("select fact_id, truth_status, ttl_hours, estimate_basis from facts_current where entity_id = 'p2'")).rows;
+      return { history, withoutSource, withSource };
     });
     expect(r.history).toEqual([
       { fact_id: "f-dev", attribute: "promised_possession", legacy_field: "declared_possession", value_text: "2027-03 (SAMPLE)", operation: "SUPERSEDED", has_ts: true },
     ]);
-    // no source yet → derived as estimated; TTL falls back to the catalogue default
-    expect(r.current).toEqual([{ fact_id: "f-dev2", truth_status: "estimated", ttl_hours: 168 }]);
+    expect(r.withoutSource).toEqual([]);
+    expect(r.withSource).toHaveLength(1);
+    expect(r.withSource[0]).toMatchObject({ fact_id: "f-dev2", truth_status: "estimated", ttl_hours: 168 });
+    expect(r.withSource[0].estimate_basis.sources.map((s: Record<string, unknown>) => s.sourceId)).toEqual(["sample-news"]);
     // deleting the project still cascades (SAMPLE clean-up path in migrate.ts)
     expect(await errorAs(c, "service_role", null, "delete from projects where id = 'p2'")).toBeNull();
   });

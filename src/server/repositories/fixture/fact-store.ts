@@ -1,6 +1,6 @@
 import "server-only";
 import type { Project } from "@/domain/types";
-import { getSource } from "@/discovery/registry";
+import { getSource, isWebResearchSource } from "@/discovery/registry";
 import {
   factAttributeSchema,
   factEntityIdSchema,
@@ -8,6 +8,7 @@ import {
   getFactAttribute,
   mapFactsCurrentRow,
   resolveFactsCurrent,
+  tryIsoDate,
   type CurrentFact,
   type FactCandidateInput,
   type FactEntityType,
@@ -97,33 +98,48 @@ export const SAMPLE_FACT_OBSERVATIONS: readonly FactCandidateInput[] = [
   },
 ];
 
-/** Registry source type → spec 02 source_type (mirrors tn_spec_source_type in 0006). */
-function specSourceType(type: string | undefined): string | null {
+/** Registry source → spec 02 source_type (mirrors tn_spec_source_type in 0006). */
+function specSourceType(sourceId: string): string | null {
+  if (isWebResearchSource(sourceId)) return "search";
+  const type = getSource(sourceId)?.type;
   if (!type) return null;
   return ({ regulator: "rera", government: "govt", developer: "builder", listing_portal: "portal" } as Record<string, string>)[type] ?? type;
+}
+
+/** Mirrors tn_source_is_official: regulator/government/developer, not web research, not rejected. */
+function isOfficialSource(sourceId: string): boolean {
+  const s = getSource(sourceId);
+  return !!s && ["regulator", "government", "developer"].includes(s.type) && !isWebResearchSource(sourceId) && s.status !== "rejected";
 }
 
 /** Current curated facts whose field maps to a catalogue attribute (as the view merges them). */
 function curatedCandidates(projects: readonly Project[]): FactCandidateInput[] {
   const attr = getFactAttribute("project", "promised_possession")!;
-  return projects.map((p) => {
+  // M2: a known curated value without a source never enters facts_current
+  return projects.filter((p) => p.declaredPossession.status === "unknown" || p.declaredPossession.sources.length > 0).map((p) => {
     const f = p.declaredPossession;
-    const latest = [...f.sources].sort((x, y) => y.observedAt.localeCompare(x.observedAt))[0];
-    const official = f.sources.some((s) => ["regulator", "government", "developer"].includes(getSource(s.sourceId)?.type ?? ""));
-    const truth = f.status === "unknown" ? "unknown" : official ? "official" : "estimated";
+    const newestFirst = [...f.sources].sort((x, y) => y.observedAt.localeCompare(x.observedAt));
+    // M3: an official-qualifying source represents the fact when there is one, then the newest
+    const latest = newestFirst.find((s) => isOfficialSource(s.sourceId)) ?? newestFirst[0];
+    const official = f.sources.some((s) => isOfficialSource(s.sourceId));
+    const truth = f.truth ?? (f.status === "unknown" ? "unknown" : official ? "official" : "estimated");
     const observedAt = latest?.observedAt ?? p.lastCheckedAt;
+    const text = f.status === "known" && typeof f.value === "string" ? f.value : null;
+    const date = tryIsoDate(text); // L2: served and compared as a date
     return {
       ...base,
       entity_id: p.id,
       origin: "curated" as const,
       fact_id: `${p.id}:declared_possession`,
       attribute: attr.attribute,
-      value_text: f.status === "known" && typeof f.value === "string" ? f.value : null,
-      truth_status: f.truth ?? truth,
+      value_text: date ? null : text,
+      value_date: date,
+      truth_status: truth,
+      estimate_basis: truth === "estimated" ? { sources: newestFirst.map((s) => ({ sourceId: s.sourceId, url: s.url, observedAt: s.observedAt })) } : null,
       verification: f.verification,
       source_id: latest?.sourceId ?? null,
       source_url: latest?.url ?? null,
-      source_type: specSourceType(latest ? getSource(latest.sourceId)?.type : undefined),
+      source_type: latest ? specSourceType(latest.sourceId) : null,
       observed_at: observedAt,
       last_verified_at: f.lastVerifiedAt ?? observedAt,
       ttl_hours: f.ttlHours ?? attr.defaultTtlHours,

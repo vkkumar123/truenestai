@@ -126,6 +126,22 @@ d("migration runner + seed", () => {
     expect((await errorAs(c, "authenticated", null, "select * from private.settings"))?.code).toBe("42501");
   });
 
+  it("0006 L1: marking production is refused while SAMPLE fact observations remain, even after SAMPLE projects are gone", async () => {
+    await c.query("begin");
+    try {
+      const p = SAMPLE_PROJECTS[0];
+      await c.query(
+        `insert into fact_observations (entity_type, entity_id, attribute, status, source_id, source_type, observed_at, last_verified_at, ttl_hours, added_by, is_sample)
+         values ('project', $1, 'oc_status', 'unknown', 'sample-feed', 'search', now(), now(), 72, 'research', true)`,
+        [p.id],
+      );
+      await c.query("delete from projects where is_sample; delete from developers where is_sample");
+      await expect(migrate(c, { migrationsDir: MIGRATIONS, markEnvironment: "production" })).rejects.toThrow(/SAMPLE fact observations/);
+    } finally {
+      await c.query("rollback");
+    }
+  });
+
   it("L5: reference seed carries no fixture sources; the SAMPLE seed adds them", async () => {
     const { readFileSync } = await import("node:fs");
     expect(readFileSync(REFERENCE, "utf8")).not.toMatch(/'fixture'/);

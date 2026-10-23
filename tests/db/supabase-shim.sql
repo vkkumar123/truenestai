@@ -13,6 +13,10 @@ begin
   end if;
 end $$;
 
+-- Supabase's default privileges: new tables and views in `public` are granted to service_role.
+-- Applied before the migrations, so every migration must revoke what it does not want granted.
+alter default privileges in schema public grant all on tables to service_role;
+
 create schema if not exists auth;
 grant usage on schema auth to anon, authenticated, service_role;
 

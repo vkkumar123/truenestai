@@ -198,7 +198,8 @@ export function mapFactsCurrentRow(input: unknown): CurrentFact {
     verification: c.verification as VerificationState,
     source: candidateSource(c),
   }));
-  const basis = r.truth_status === "estimated" ? estimateBasisSchema.safeParse(r.estimate_basis) : null;
+  // constitution §2: an estimate is never served without its basis (M2) — a malformed one is an error
+  const basis = r.truth_status === "estimated" ? estimateBasisSchema.parse(r.estimate_basis) : null;
   const fact: FactValue<unknown> = {
     status: r.truth_status === "unknown" ? "unknown" : "known",
     value: candidateValue(r),
@@ -208,7 +209,9 @@ export function mapFactsCurrentRow(input: unknown): CurrentFact {
     lastVerifiedAt: iso(r.last_verified_at),
     ttlHours: r.ttl_hours,
     conflicts,
-    ...(basis?.success ? { estimateBasis: basis.data as FactEstimateBasis } : {}),
+    ...(basis
+      ? { estimateBasis: { ...basis, sources: basis.sources.map((s) => ({ ...s, observedAt: iso(s.observedAt) })) } as FactEstimateBasis }
+      : {}),
   };
   return {
     entityType: r.entity_type,
@@ -248,7 +251,9 @@ const CURATED_WINS: readonly string[] = ["source_confirmed", "reviewed"];
 
 /** facts_current ordering: verified curated first, then official > estimated > unknown, newest, id. */
 export function compareCandidates(x: FactCandidateRow, y: FactCandidateRow): number {
-  const cv = (c: FactCandidateRow) => (c.origin === "curated" && CURATED_WINS.includes(c.verification) ? 0 : 1);
+  // M5: only a verified KNOWN curated value overrides the observations
+  const cv = (c: FactCandidateRow) =>
+    c.origin === "curated" && c.truth_status !== "unknown" && CURATED_WINS.includes(c.verification) ? 0 : 1;
   return (
     cv(x) - cv(y) ||
     TRUTH_RANK[x.truth_status] - TRUTH_RANK[y.truth_status] ||
@@ -257,7 +262,23 @@ export function compareCandidates(x: FactCandidateRow, y: FactCandidateRow): num
   );
 }
 
-const valueTuple = (c: FactCandidateRow) => JSON.stringify([c.value_text, c.value_num, c.value_date, c.value_json]);
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** 'YYYY-MM-DD' that is a real calendar date, else null (mirrors tn_try_date). */
+export function tryIsoDate(t: string | null | undefined): string | null {
+  if (!t || !ISO_DATE.test(t)) return null;
+  const d = new Date(`${t}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === t ? t : null;
+}
+
+/** L2: for a date attribute, an ISO date held as text compares equal to the same date. */
+function valueTuple(c: FactCandidateRow, kind: FactValueKind | undefined): string {
+  if (kind === "date") {
+    const d = c.value_date ?? tryIsoDate(c.value_text);
+    return JSON.stringify([d ? null : c.value_text, c.value_num, d, c.value_json]);
+  }
+  return JSON.stringify([c.value_text, c.value_num, c.value_date, c.value_json]);
+}
 
 /** Resolves candidates into facts_current rows (same rules as the SQL view). Sorted by attribute. */
 export function resolveFactsCurrent(candidates: readonly FactCandidateInput[], now: Date): FactsCurrentRow[] {
@@ -284,7 +305,7 @@ export function resolveFactsCurrent(candidates: readonly FactCandidateInput[], n
       is_stale: Date.parse(iso(w.last_verified_at)) + w.ttl_hours * 3_600_000 < now.getTime(),
       conflicts,
       conflict_count: rest.length,
-      has_disagreement: rest.some((o) => valueTuple(o) !== valueTuple(w)),
+      has_disagreement: rest.some((o) => valueTuple(o, attr?.valueKind) !== valueTuple(w, attr?.valueKind)),
     });
   }
   return out.sort((x, y) => (x.attribute < y.attribute ? -1 : x.attribute > y.attribute ? 1 : 0));

@@ -11,7 +11,7 @@
 -- and the spec names are exposed as the views `facts_current` and `facts_history`.
 --
 -- Access: RLS on every new table, service role only, NO anon/authenticated grant (nothing renders
--- from this store yet). Automated rows can never be verified (CHECK). History is append-only for
+-- from this store yet). Observations are always unverified (CHECK). History is append-only for
 -- every role, including service_role and the owner. Nothing here holds property data: the only
 -- rows inserted are the attribute catalogue (schema metadata) and a backfill of existing facts.
 
@@ -141,14 +141,17 @@ create table public.fact_observations (
   -- an estimate always carries its basis; nothing else does (constitution §2)
   constraint fact_observations_estimate_basis check ((status = 'estimated') = (estimate_basis is not null)),
   constraint fact_observations_verified_after_observed check (last_verified_at >= observed_at),
-  -- C7 / plan §5.4: automation can never raise verification. Only staff paths change it.
-  constraint fact_observations_automated_unverified check (
-    added_by not in ('crawl','research','extraction') or verification = 'unverified')
+  -- C7 / plan §5.4: automation can never raise verification. Until a staff RPC with an actor and an
+  -- audit event exists, NO observation may be anything but unverified (staff rows included).
+  constraint fact_observations_unverified_only check (verification = 'unverified'),
+  -- constitution §2: official = the builder, RERA or a government body (fixture for SAMPLE rows)
+  constraint fact_observations_official_source_type check (
+    status <> 'official' or source_type in ('rera','builder','govt','fixture'))
 );
 create index fact_observations_entity_idx on public.fact_observations (entity_type, entity_id, attribute);
 
--- Validates the entity exists, the value matches the catalogue's value_kind, and that identity
--- columns (and added_by, so an automated row cannot be relabelled to staff) never change.
+-- Validates the entity exists (and that a project row's is_sample equals the project's), the value
+-- matches the catalogue's value_kind, and that identity columns, added_by and is_sample never change.
 create or replace function public.tn_fact_observations_validate() returns trigger
 language plpgsql set search_path = public, pg_temp as $$
 declare
@@ -158,12 +161,15 @@ begin
        new.id is distinct from old.id or new.entity_type is distinct from old.entity_type
     or new.entity_id is distinct from old.entity_id or new.attribute is distinct from old.attribute
     or new.source_url is distinct from old.source_url or new.added_by is distinct from old.added_by
-    or new.created_at is distinct from old.created_at) then
+    or new.is_sample is distinct from old.is_sample or new.created_at is distinct from old.created_at) then
     raise exception 'fact_observations identity columns cannot change' using errcode = 'check_violation';
   end if;
   if tg_op = 'INSERT' then
     if new.entity_type = 'project' and not exists (select 1 from public.projects where id = new.entity_id) then
       raise exception 'unknown project %', new.entity_id using errcode = 'foreign_key_violation';
+    elsif new.entity_type = 'project' and new.is_sample is distinct from
+          (select p.is_sample from public.projects p where p.id = new.entity_id) then
+      raise exception 'is_sample must equal the project''s is_sample' using errcode = 'check_violation';
     elsif new.entity_type = 'locality' and not exists (select 1 from public.localities where id = new.entity_id) then
       raise exception 'unknown locality %', new.entity_id using errcode = 'foreign_key_violation';
     end if;
@@ -222,8 +228,9 @@ create table public.fact_observations_history (
 create index fact_observations_history_entity_idx on public.fact_observations_history
   (entity_type, entity_id, attribute, superseded_at);
 
--- Security definer: the history write never depends on the writer's privileges (service_role has
--- SELECT only on the history table, so it cannot forge history rows directly).
+-- Security definer: the history write never depends on the writer's privileges. service_role's
+-- default privileges are revoked below and it is granted SELECT only on the history table, so it
+-- cannot forge history rows directly.
 create or replace function public.tn_fact_observations_to_history() returns trigger
 language plpgsql security definer set search_path = public, pg_temp as $$
 begin
@@ -252,9 +259,15 @@ create trigger fact_observations_history_append_only
 create trigger fact_observations_history_no_truncate
   before truncate on public.fact_observations_history
   for each statement execute function public.tn_reject_audit_mutation();
--- TRUNCATE on fact_observations would skip the row-level history capture.
+-- TRUNCATE skips row-level triggers (history capture, the facts guard), so it is refused outright.
 create trigger fact_observations_no_truncate
   before truncate on public.fact_observations
+  for each statement execute function public.tn_reject_audit_mutation();
+create trigger facts_no_truncate
+  before truncate on public.facts
+  for each statement execute function public.tn_reject_audit_mutation();
+create trigger fact_sources_no_truncate
+  before truncate on public.fact_sources
   for each statement execute function public.tn_reject_audit_mutation();
 
 -- ---------------------------------------------------------------------------
@@ -270,28 +283,63 @@ alter table public.facts
     or (status = 'unknown' and truth_status = 'unknown')
     or (status = 'known' and truth_status in ('official','estimated')));
 
--- Plan §5: regulator / government / developer sources → official; any other source → estimated;
--- unknown stays unknown. (Rows written later with a null truth_status get the same rule at read
--- time in facts_current.)
+-- Web research sources (src/discovery/registry.ts WEB_RESEARCH_SOURCE_IDS; KEEP IN SYNC, a unit
+-- test compares them). Their registry type is `developer`, but a web-search result is not an
+-- official figure (H1).
+create or replace function public.tn_is_web_research_source(p_id text) returns boolean
+language sql immutable as $$
+  select p_id in ('anthropic-web-search','sample-web-research')
+$$;
+grant execute on function public.tn_is_web_research_source(text) to service_role;
+
+-- A source whose facts count as official (constitution §2): regulator / government / developer,
+-- not web research, not rejected in the registry.
+create or replace function public.tn_source_is_official(p_id text, p_type text, p_status text) returns boolean
+language sql immutable as $$
+  select p_type in ('regulator','government','developer')
+     and not public.tn_is_web_research_source(p_id)
+     and p_status is distinct from 'rejected'
+$$;
+grant execute on function public.tn_source_is_official(text, text, text) to service_role;
+
+-- Plan §5: an official source (above) → official; any other source → estimated; unknown stays
+-- unknown. (Rows written later with a null truth_status get the same rule at read time in
+-- facts_current, and the guard only lets a null truth_status be set to exactly this value.)
 create or replace function public.tn_curated_truth_status(p_fact_id text, p_status text) returns text
 language sql stable security invoker set search_path = public, pg_temp as $$
   select case
     when p_status = 'unknown' then 'unknown'
     when exists (select 1 from public.fact_sources fs join public.sources s on s.id = fs.source_id
-                 where fs.fact_id = p_fact_id and s.type in ('regulator','government','developer')) then 'official'
+                 where fs.fact_id = p_fact_id and public.tn_source_is_official(s.id, s.type, s.status)) then 'official'
     else 'estimated'
   end
 $$;
 revoke all on function public.tn_curated_truth_status(text, text) from public, anon, authenticated;
 grant execute on function public.tn_curated_truth_status(text, text) to service_role;
 
--- Registry source type (sources.type) → spec 02 source_type vocabulary, for curated rows.
-create or replace function public.tn_spec_source_type(p_type text) returns text
+-- Registry source (id, sources.type) → spec 02 source_type vocabulary, for curated rows.
+create or replace function public.tn_spec_source_type(p_id text, p_type text) returns text
 language sql immutable as $$
-  select case p_type when 'regulator' then 'rera' when 'government' then 'govt' when 'developer' then 'builder'
+  select case
+    when public.tn_is_web_research_source(p_id) then 'search'
+    else case p_type when 'regulator' then 'rera' when 'government' then 'govt' when 'developer' then 'builder'
                      when 'listing_portal' then 'portal' else p_type end
+  end
 $$;
-grant execute on function public.tn_spec_source_type(text) to service_role;
+grant execute on function public.tn_spec_source_type(text, text) to service_role;
+
+-- 'YYYY-MM-DD' text → date, else null (never raises). Used to compare dates as dates (L2).
+create or replace function public.tn_try_date(p text) returns date
+language plpgsql immutable as $$
+begin
+  if p ~ '^\d{4}-\d{2}-\d{2}$' then
+    return p::date;
+  end if;
+  return null;
+exception when others then
+  return null;
+end $$;
+grant execute on function public.tn_try_date(text) to service_role;
 
 update public.facts f set
   truth_status = public.tn_curated_truth_status(f.id, f.status),
@@ -300,7 +348,9 @@ where f.truth_status is null;
 
 -- Guard: a curated fact row is a historical record. Its identity, value and status never change
 -- (a new value is a new row via research_set_fact, which marks the old one is_current = false).
--- is_current, verification (via the audited RPCs) and the truth/TTL columns may change.
+-- is_current, verification (via the audited RPCs), last_verified_at and ttl_hours may change.
+-- truth_status may only go from null to the derived value (tn_curated_truth_status); any other
+-- change is refused (H2), so a fact cannot be relabelled official by hand.
 -- Direct DELETE is refused for every role; a cascade from deleting its project or unit (RI
 -- trigger, pg_trigger_depth() > 1) is allowed so SAMPLE data can still be removed (migrate.ts).
 create or replace function public.tn_facts_guard() returns trigger
@@ -320,6 +370,12 @@ begin
     raise exception 'facts value, field, status and created_at cannot be updated (insert a new current row instead)'
       using errcode = 'insufficient_privilege';
   end if;
+  if new.truth_status is distinct from old.truth_status
+     and not (old.truth_status is null
+              and new.truth_status is not distinct from public.tn_curated_truth_status(new.id, new.status)) then
+    raise exception 'facts.truth_status can only be set once, to the value derived from its sources'
+      using errcode = 'insufficient_privilege';
+  end if;
   return new;
 end $$;
 
@@ -329,7 +385,7 @@ create trigger facts_guard before update or delete on public.facts
 -- ---------------------------------------------------------------------------
 -- facts_current: one row per (entity, attribute), from live observations plus current curated
 -- project facts whose field maps to a catalogue attribute (legacy_field).
--- Precedence: a curated value whose verification is source_confirmed or reviewed wins; otherwise
+-- Precedence: a KNOWN curated value whose verification is source_confirmed or reviewed wins; otherwise
 -- official > estimated > unknown, then newest observed_at, then id. Every other live row is listed
 -- in `conflicts` (never hidden, constitution §3). is_stale = last_verified_at + ttl < now().
 -- security_invoker: the caller's privileges and RLS apply (service role only for now).
@@ -352,31 +408,43 @@ with candidates as (
     'curated'::text,
     f.id,
     'project'::text, f.project_id, a.attribute,
-    case when jsonb_typeof(f.value) = 'string' then f.value #>> '{}' end,
+    case when dt.d is null and jsonb_typeof(f.value) = 'string' then f.value #>> '{}' end,
     case when jsonb_typeof(f.value) = 'number' then (f.value #>> '{}')::numeric end,
-    null::date,
+    dt.d,
     case when jsonb_typeof(f.value) not in ('string','number') then f.value end,
     a.unit,
-    coalesce(f.truth_status, public.tn_curated_truth_status(f.id, f.status)),
-    f.verification, null::numeric, null::jsonb,
+    tr.truth,
+    f.verification, null::numeric,
+    -- an estimated curated value's basis is the sources staff recorded for it
+    case when tr.truth = 'estimated' then jsonb_build_object('sources',
+      (select jsonb_agg(jsonb_build_object('sourceId', fs.source_id, 'url', fs.url, 'observedAt', fs.observed_at)
+                        order by fs.observed_at desc, fs.id)
+       from public.fact_sources fs where fs.fact_id = f.id)) end,
     ls.source_id, ls.url,
-    public.tn_spec_source_type(ls.type),
+    public.tn_spec_source_type(ls.source_id, ls.type),
     coalesce(ls.observed_at, f.created_at),
     coalesce(f.last_verified_at, ls.observed_at, f.created_at),
     coalesce(f.ttl_hours, a.default_ttl_hours),
     null::text, 'staff'::text, p.is_sample,
-    f.verification in ('source_confirmed','reviewed')
+    -- M5: only a verified KNOWN curated value overrides the observations
+    f.status = 'known' and f.verification in ('source_confirmed','reviewed')
   from public.facts f
   join public.fact_attributes a on a.entity_type = 'project' and a.legacy_field = f.field
   join public.projects p on p.id = f.project_id
+  cross join lateral (select coalesce(f.truth_status, public.tn_curated_truth_status(f.id, f.status)) as truth) tr
+  -- L2: an ISO date stored as text in a date attribute is compared (and served) as a date
+  cross join lateral (select case when a.value_kind = 'date' and jsonb_typeof(f.value) = 'string'
+                                  then public.tn_try_date(f.value #>> '{}') end as d) dt
+  -- M3: the representative source is an official-qualifying one when there is one, then the newest
   left join lateral (
     select fs.source_id, fs.url, fs.observed_at, s.type
     from public.fact_sources fs join public.sources s on s.id = fs.source_id
     where fs.fact_id = f.id
-    order by fs.observed_at desc, fs.id
+    order by public.tn_source_is_official(s.id, s.type, s.status) desc, fs.observed_at desc, fs.id
     limit 1
   ) ls on true
-  where f.is_current and f.unit_id is null
+  -- M2: a known curated value without a source never enters facts_current (constitution §1)
+  where f.is_current and f.unit_id is null and (f.status = 'unknown' or ls.source_id is not null)
 ),
 ranked as (
   select c.*,
@@ -447,7 +515,7 @@ select
   case when jsonb_typeof(f.value) not in ('string','number') then f.value end,
   a.unit,
   coalesce(f.truth_status, public.tn_curated_truth_status(f.id, f.status)), f.verification, null::numeric, null::jsonb,
-  ls.source_id, ls.url, public.tn_spec_source_type(ls.type), coalesce(ls.observed_at, f.created_at),
+  ls.source_id, ls.url, public.tn_spec_source_type(ls.source_id, ls.type), coalesce(ls.observed_at, f.created_at),
   coalesce(f.last_verified_at, ls.observed_at, f.created_at), coalesce(f.ttl_hours, a.default_ttl_hours),
   null::text, 'staff'::text, p.is_sample, f.created_at, 'SUPERSEDED'::text,
   (select min(n.created_at) from public.facts n
@@ -460,7 +528,7 @@ left join lateral (
   select fs.source_id, fs.url, fs.observed_at, s.type
   from public.fact_sources fs join public.sources s on s.id = fs.source_id
   where fs.fact_id = f.id
-  order by fs.observed_at desc, fs.id
+  order by public.tn_source_is_official(s.id, s.type, s.status) desc, fs.observed_at desc, fs.id
   limit 1
 ) ls on true
 where not f.is_current;
@@ -472,8 +540,10 @@ alter table public.fact_attributes           enable row level security;
 alter table public.fact_observations         enable row level security;
 alter table public.fact_observations_history enable row level security;
 
+-- service_role is revoked too: Supabase's default privileges grant it ALL on new tables and views,
+-- so only the explicit grants below remain (H4).
 revoke all on public.fact_attributes, public.fact_observations, public.fact_observations_history,
-  public.facts_current, public.facts_history from public, anon, authenticated;
+  public.facts_current, public.facts_history from public, anon, authenticated, service_role;
 grant select on public.fact_attributes to service_role;                         -- catalogue: migrations only
 grant select, insert, update, delete on public.fact_observations to service_role;
 grant select on public.fact_observations_history to service_role;               -- written by trigger only

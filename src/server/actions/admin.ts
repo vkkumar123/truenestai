@@ -2,8 +2,8 @@
 import "server-only";
 import { redirect } from "next/navigation";
 import { dataBackend } from "../env";
-import { loginWithDevPassword, loginWithSupabasePassword, logoutStaff } from "../auth";
-import type { AdminLoginState } from "./types";
+import { loginWithDevPassword, loginWithSupabasePassword, logoutStaff, MIN_STAFF_PASSWORD_LENGTH, setStaffPasswordFromLink } from "../auth";
+import type { AdminLoginState, SetPasswordState } from "./types";
 import { safeAdminPath } from "../redirects";
 import { ensureRenderPhaseAfterAction } from "./mpa";
 import { requestClientKey } from "../client-ip";
@@ -51,4 +51,28 @@ export async function adminLoginAction(_prev: AdminLoginState, formData: FormDat
 export async function adminLogoutAction(): Promise<void> {
   await logoutStaff();
   redirect(LOGIN_PATH);
+}
+
+/**
+ * Sets the password from an invite / reset link. Use with `useActionState(setPasswordAction, { status: "idle" })`.
+ * Fields: `access_token`, `refresh_token` (from the link's URL fragment), `password`, `confirm`.
+ * Redirects to /admin on success.
+ */
+export async function setPasswordAction(_prev: SetPasswordState, formData: FormData): Promise<SetPasswordState> {
+  const accessToken = formData.get("access_token");
+  const refreshToken = formData.get("refresh_token");
+  const password = formData.get("password");
+  const confirm = formData.get("confirm");
+  if (typeof accessToken !== "string" || typeof refreshToken !== "string" || !accessToken || !refreshToken
+    || accessToken.length > 8192 || refreshToken.length > 1024) {
+    return { status: "error", linkInvalid: true, message: "This link is incomplete. Open the link from your email again." };
+  }
+  if (typeof password !== "string" || password.length < MIN_STAFF_PASSWORD_LENGTH || password.length > 512) {
+    return { status: "error", message: `Use at least ${MIN_STAFF_PASSWORD_LENGTH} characters.` };
+  }
+  if (password !== confirm) return { status: "error", message: "The two passwords do not match." };
+  const result = await setStaffPasswordFromLink(accessToken, refreshToken, password);
+  ensureRenderPhaseAfterAction("/admin/set-password");
+  if (!result.ok) return { status: "error", message: result.message, linkInvalid: result.error === "link_invalid" };
+  redirect("/admin");
 }

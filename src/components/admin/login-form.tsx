@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useEffect } from "react";
 import { adminLoginAction } from "@/server/actions/admin";
 import type { AdminLoginState } from "@/server/actions/types";
 import { Alert } from "@/components/ui/alert";
@@ -12,6 +12,12 @@ const initial: AdminLoginState = { status: "idle" };
 
 export function AdminLoginForm({ mode, next }: { mode: "fixture" | "supabase"; next: string }) {
   const [state, formAction, pending] = useActionState(adminLoginAction, initial);
+  useEffect(() => {
+    // Supabase invite / reset links redirect here (the allow-listed URL) with tokens or an error in
+    // the fragment; hand them to the set-password page.
+    const hash = window.location.hash;
+    if (/[#&](access_token|error_code)=/.test(hash)) window.location.replace(`/admin/set-password${hash}`);
+  }, []);
   return (
     <form action={formAction} className="space-y-4 rounded-lg border border-border bg-surface p-4">
       {state.status === "error" ? (

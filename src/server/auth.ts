@@ -189,6 +189,45 @@ export async function loginWithSupabasePassword(email: string, password: string)
   return { ok: true, session: { userId: data.user.id, role, mode: "supabase", expiresAt: null } };
 }
 
+export const MIN_STAFF_PASSWORD_LENGTH = 12;
+
+export type SetPasswordResult =
+  | { ok: true }
+  | { ok: false; error: "link_invalid" | "not_staff" | "weak_password" | "disabled"; message: string };
+
+/**
+ * Supabase mode: completes an invite or password-reset link. The tokens come from the link's URL
+ * fragment (read in the browser, posted with the form); setSession() verifies them with the Auth
+ * server and writes the session cookies, then the new password is saved. Non-staff are signed out.
+ */
+export async function setStaffPasswordFromLink(
+  accessToken: string,
+  refreshToken: string,
+  password: string,
+): Promise<SetPasswordResult> {
+  if (dataBackend() !== "supabase") {
+    return { ok: false, error: "disabled", message: "Password setup is only available with Supabase sign-in." };
+  }
+  const supabase = await supabaseServerClient();
+  const { data, error } = await supabase.auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
+  if (error || !data.user) {
+    log.warn("auth.set_password_link_invalid");
+    return { ok: false, error: "link_invalid", message: "This link has expired or was already used. Ask an admin for a new one." };
+  }
+  const profile = await supabase.from("staff_profiles").select("role").eq("user_id", data.user.id).maybeSingle();
+  if (profile.data?.role !== "advisor" && profile.data?.role !== "admin") {
+    await supabase.auth.signOut();
+    return { ok: false, error: "not_staff", message: "This account does not have staff access." };
+  }
+  const updated = await supabase.auth.updateUser({ password });
+  if (updated.error) {
+    log.warn("auth.set_password_rejected", { code: updated.error.code ?? "unknown" });
+    return { ok: false, error: "weak_password", message: "Supabase rejected this password. Choose a longer or less common one." };
+  }
+  log.info("auth.set_password_ok", { role: profile.data.role });
+  return { ok: true };
+}
+
 export async function logoutStaff(): Promise<void> {
   if (dataBackend() === "supabase") {
     const supabase = await supabaseServerClient();

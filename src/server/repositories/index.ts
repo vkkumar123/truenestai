@@ -5,6 +5,7 @@ import { createSupabaseRepositories } from "./supabase";
 import type { Repositories } from "./types";
 
 export type * from "./types";
+export type { CurrentFact, FactEntityType } from "./fact-store";
 export { AUTO_UNPUBLISH_NOTE, CONFLICT_MESSAGE, RESEARCH_FAILURE_COOLDOWN_HOURS, RESEARCH_STALL_MINUTES } from "./types";
 
 // Kept on globalThis so the dev fixture lead store survives hot reloads in one process.

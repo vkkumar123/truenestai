@@ -35,7 +35,7 @@ d("migration runner + seed", () => {
 
   it("applies every migration once, with a ledger, then the seed", async () => {
     const r = await migrate(c, { migrationsDir: MIGRATIONS, seedFiles: [SEED], sampleSeed: true });
-    expect(r.applied).toEqual(["0001_core.sql", "0002_research_audit.sql", "0003_m2_live.sql", "0004_m2_review.sql", "0005_research_jobs.sql"]);
+    expect(r.applied).toEqual(["0001_core.sql", "0002_research_audit.sql", "0003_m2_live.sql", "0004_m2_review.sql", "0005_research_jobs.sql", "0006_fact_store.sql"]);
     expect(r.seeded).toEqual(["seed.sql"]);
     const ledger = (await c.query("select name, length(checksum) as len from private.schema_migrations order by name")).rows;
     expect(ledger).toEqual(r.applied.map((name) => ({ name, len: 64 })));
@@ -45,7 +45,7 @@ d("migration runner + seed", () => {
     const before = await Promise.all(["projects", "facts", "fact_sources", "sources", "localities"].map((t) => count(c, t)));
     const r = await migrate(c, { migrationsDir: MIGRATIONS, seedFiles: [SEED, REFERENCE], sampleSeed: true });
     expect(r.applied).toEqual([]);
-    expect(r.skipped).toHaveLength(5);
+    expect(r.skipped).toHaveLength(6);
     const after = await Promise.all(["projects", "facts", "fact_sources", "sources", "localities"].map((t) => count(c, t)));
     expect(after).toEqual(before);
   });
@@ -158,7 +158,13 @@ d("migration runner + seed", () => {
       await c.query("update facts set verification = 'reviewed' where field = 'rera_numbers' and is_current");
       await c.query("update facts set verification = 'disputed' where field = 'address' and is_current");
       await c.query("delete from fact_sources where fact_id in (select id from facts where field = 'declared_possession')");
-      await c.query("update facts set status = 'unknown', value = null where field = 'unit_price_inr'");
+      // 0006 guard: a fact's value/status never change in place, so supersede with a new current row.
+      await c.query(`
+        with old as (
+          update facts set is_current = false where field = 'unit_price_inr' and is_current
+          returning project_id, unit_id, field, verification)
+        insert into facts (project_id, unit_id, field, value, status, verification)
+          select project_id, unit_id, field, null, 'unknown', verification from old`);
       await compareAll("mutated", (p) => {
         p.reraNumbers.verification = "reviewed";
         p.address.verification = "disputed";

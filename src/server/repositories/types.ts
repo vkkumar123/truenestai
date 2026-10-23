@@ -17,6 +17,7 @@ import type {
 import type { BhkOption } from "@/domain/search-options";
 import type { LeadQualification } from "@/leads/qualification";
 import type { DocumentContentType, DocumentStorage } from "../storage/documents";
+import type { CurrentFact, FactEntityType } from "./fact-store";
 
 export interface ProjectFilter {
   localityId?: string;
@@ -284,6 +285,19 @@ export interface ResearchJobRepository {
   listRecent(limit: number): Promise<ResearchJobWithListings[]>;
 }
 
+// ---- S1a: fact store read model (0006_fact_store.sql, D18 proposed) ----
+
+/**
+ * READ-ONLY access to facts_current (service role in Supabase; no anon grant yet, nothing renders
+ * from it). One CurrentFact per attribute; contradicting values are in fact.conflicts, never hidden.
+ * Inputs are validated (zod); a malformed key throws.
+ */
+export interface FactStoreRepository {
+  /** Every current attribute of one entity, sorted by attribute. */
+  listCurrent(entityType: FactEntityType, entityId: string): Promise<CurrentFact[]>;
+  getCurrent(entityType: FactEntityType, entityId: string, attribute: string): Promise<CurrentFact | null>;
+}
+
 export interface Repositories {
   backend: "fixture" | "supabase";
   projects: ProjectRepository;
@@ -291,6 +305,8 @@ export interface Repositories {
   externalListings: ExternalListingRepository;
   researchJobs: ResearchJobRepository;
   leads: LeadRepository;
+  /** Read-only fact store (facts_current). */
+  factStore: FactStoreRepository;
   /** Object storage for project documents (private; server-side access only). */
   documentStorage: DocumentStorage;
 }

@@ -229,3 +229,51 @@ policies above, the seed, and SQL/TS readiness parity.
   (`findPublishedProjectsByRera`, via `project_search_index.rera_numbers_normalized`; no project-count cap) —
   also under `lane=external` — and returns `matchedProjects: { [listingId]: { id, slug, name } }` for
   "Researched version available".
+
+## Fact store skeleton (S1a, `0006_fact_store.sql`, D18 proposed)
+Spec 02's multi-source fact store, added **alongside** the curated store (no drops or renames). Plan:
+`/mnt/project-files/truenest/specs-alignment-plan.md` §5–§6. Nothing renders from it yet.
+
+**Two axes per fact (D18).** *Truth status* `official | estimated | unknown` says what kind of claim it is
+(constitution §2: official = builder, RERA or a government body; estimated = derived by us, always with its
+basis; unknown = nothing credible found yet, never a negative finding). *Verification* (`VerificationState`)
+says whether TrueNest reviewed it. They are independent.
+
+| Object | What it holds |
+|---|---|
+| `fact_attributes` | The spec 02 attribute catalogue (39 rows: 28 project, 5 development, 6 locality). Schema metadata only: `value_kind`, `unit`, `default_ttl_hours` (assumptions), `legally_significant` (**proposed** for C7, `legal_flag_status = 'proposed'`), `legacy_field` (`declared_possession` → `promised_possession`). TS mirror: `FACT_ATTRIBUTES` in `src/server/repositories/fact-store.ts` (unit test compares it to the SQL seed). |
+| `fact_observations` | One row per `(entity_type, entity_id, attribute, source_url)` (`unique nulls not distinct`), written by automation (`added_by` crawl / research / extraction) or staff. Entity types `project`, `locality` for now (existence checked by trigger). `value_text/num/date/json` must match the catalogue `value_kind`; `unknown` carries no value; a known value needs an `https` `source_url`; `estimate_basis` is required for, and only for, `estimated`; `excerpt` ≤ 20 words; `last_verified_at ≥ observed_at`; `ttl_hours > 0`. Identity columns and `added_by` never change. |
+| `fact_observations_history` | The OLD row of every UPDATE/DELETE on `fact_observations` (no-op upserts skipped), with `operation` and `superseded_at`. Written only by a `security definer` trigger. |
+| `facts` (curated) | New nullable `truth_status`, `last_verified_at`, `ttl_hours`. Backfilled: a source of type regulator / government / developer → `official`, any other source (or none) → `estimated`, `unknown` stays `unknown`; `last_verified_at` = latest `fact_sources.observed_at`. Rows written later with a null truth status get the same rule at read time (`tn_curated_truth_status`). |
+| `facts_current` (view) | One row per `(entity_type, entity_id, attribute)` over live observations **plus** current curated project facts whose field maps via `legacy_field`. Precedence: a curated value with verification `source_confirmed`/`reviewed` wins; otherwise official > estimated > unknown, then newest `observed_at`, then id. Every other live row is listed in `conflicts jsonb` (with `conflict_count`, `has_disagreement`), never hidden (constitution §3). `is_stale` = `last_verified_at + ttl_hours < now()`: an `unknown` inside its TTL is not stale, so it suppresses re-research. `requires_review` = legally significant and not `source_confirmed`/`reviewed` (C7, proposed). Curated `source_type` is mapped from `sources.type` (regulator → rera, government → govt, developer → builder, listing_portal → portal). |
+| `facts_history` (view) | `fact_observations_history` rows plus superseded curated rows (`is_current = false`, `operation = 'SUPERSEDED'`, `superseded_at` = the next row's `created_at`). |
+
+**Integrity rules (every role, including the service role and the owner):**
+- `fact_observations_automated_unverified` CHECK: an automated row (`crawl`, `research`, `extraction`) is always
+  `unverified`, on insert and on update. Only staff paths change verification.
+- `fact_observations_history` is append-only (UPDATE, DELETE and TRUNCATE rejected by
+  `tn_reject_audit_mutation`, now generic: "`<table>` is append-only"). TRUNCATE of `fact_observations` is
+  rejected too (it would skip history capture). Takedown/erasure will use an audited `tn_redact()` tombstone (C23, later).
+- `facts_guard` trigger on curated `facts`: `id`, `project_id`, `unit_id`, `field`, `value`, `status`,
+  `created_at` never change in place (a new value is a new row via `research_set_fact`), and direct DELETE is
+  refused. `is_current`, `verification` (via the audited RPCs) and the truth/TTL columns may change. A cascade
+  from deleting the project or unit (RI trigger, `pg_trigger_depth() > 1`) is still allowed, so SAMPLE data can
+  be removed before marking production.
+
+**Access:** RLS on all three tables; no policies and no grants for `anon`/`authenticated` on the tables or the
+views (both views are `security_invoker`). `service_role`: `fact_attributes` SELECT (catalogue changes go through
+migrations), `fact_observations` SELECT/INSERT/UPDATE/DELETE, `fact_observations_history` SELECT only,
+`facts_current`/`facts_history` SELECT. Public read through filtered views comes with the rendering slice.
+
+**Server read model:** `FactStoreRepository` (`getRepositories().factStore`, read-only): `listCurrent(entityType,
+entityId)` and `getCurrent(entityType, entityId, attribute)` return `CurrentFact` rows whose `fact` is a
+`FactValue` with `truth`, `lastVerifiedAt`, `ttlHours`, `conflicts` (and `estimateBasis` when well-formed).
+Supabase: service-role client over `facts_current`, rows validated with zod. Fixture: fictional SAMPLE
+observations for `sample-proj-lakeview` plus the curated `declaredPossession` of the SAMPLE projects, resolved by
+`resolveFactsCurrent` (TS mirror of the view's precedence). Tests: `tests/db/fact-store.test.ts`,
+`src/server/repositories/fact-store.test.ts`.
+
+**Open (for review / Fury):** curated facts from `anthropic-web-search` (registry type `developer`) derive as
+`official` under the plan's rule; C8 (news reports of official figures) is not modelled yet. Only
+`declared_possession` maps to the catalogue; `address`, `rera_numbers` and `construction_status` map to spec
+project columns in S1b, and unit price/area to `cost_sheets` (S5a).

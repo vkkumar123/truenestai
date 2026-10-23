@@ -15,9 +15,11 @@
     "db:migrate": "tsx --env-file-if-exists=.env.local --conditions=react-server scripts/db-migrate.ts",
     "db:seed": "tsx --env-file-if-exists=.env.local --conditions=react-server scripts/db-migrate.ts --seed",
     "db:seed:generate": "tsx --conditions=react-server scripts/generate-seed.ts",
-    "staff:create": "tsx --env-file-if-exists=.env.local --conditions=react-server scripts/create-staff.ts"
+    "staff:create": "tsx --env-file-if-exists=.env.local --conditions=react-server scripts/create-staff.ts",
+    "research:run": "tsx --env-file-if-exists=.env.local --conditions=react-server scripts/research-run.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "0.131.0",
     "@supabase/ssr": "^0.12.7",
     "@supabase/supabase-js": "^2.118.0",
     "class-variance-authority": "^0.7.1",

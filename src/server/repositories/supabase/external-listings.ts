@@ -1,7 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ExternalListing } from "@/domain/types";
-import type { ExternalListingRepository } from "../types";
+import { clampLimit, type ExternalListingRepository, type StoredListingFilter } from "../types";
 import { externalListingToRow, mapExternalListingRow, type ExternalListingRow } from "./mappers";
 
 /** Reads use the anon client; upserts need the service-role client (workers only). */
@@ -15,6 +15,23 @@ export class SupabaseExternalListingRepository implements ExternalListingReposit
     const { data, error } = await this.reader.from("external_listings").select("*").eq("id", id).maybeSingle();
     if (error) throw new Error(`getById failed: ${error.message}`);
     return data ? mapExternalListingRow(data as ExternalListingRow) : null;
+  }
+
+  async search(filter: StoredListingFilter): Promise<ExternalListing[]> {
+    if (!filter.sourceIds.length) return [];
+    let q = this.reader.from("external_listings").select("*").in("source_id", filter.sourceIds);
+    if (filter.localityId) q = q.eq("locality_id", filter.localityId);
+    const text = filter.text?.trim();
+    if (text) {
+      // Escape LIKE wildcards and PostgREST or() syntax characters.
+      const t = text.replace(/[\\%_]/g, (c) => `\\${c}`).replace(/[,()"]/g, " ");
+      q = q.or(`title.ilike.%${t}%,developer_name.ilike.%${t}%`);
+    }
+    const { data, error } = await q
+      .order("last_seen_at", { ascending: false, nullsFirst: false })
+      .limit(clampLimit(filter.limit, 20, 50));
+    if (error) throw new Error(`search failed: ${error.message}`);
+    return (data as ExternalListingRow[]).map(mapExternalListingRow);
   }
 
   async upsertMany(listings: ExternalListing[]): Promise<ExternalListing[]> {

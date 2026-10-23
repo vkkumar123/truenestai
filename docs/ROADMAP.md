@@ -46,10 +46,12 @@ Journeys J1–J7 from `PRODUCT_SPEC.md`.
 - [x] Review fixes: SAMPLE seed blocked on production (`--mark-production`), unused `authenticated` lead grants revoked, failure-only login throttle, upload cleanup safety, fixture sources out of reference seed, staff list admin-only.
 - [ ] Live run against the owner's Supabase: migrate, `--mark-production` (staging excepted), reference seed, invite staff, smoke test sign-in/refresh/upload/download/assign.
 
-## M2.5 — On-demand research (owner requirement 2026-10-22) — **owner: R3 + source approval**
-- [ ] A search with no DB match queues a research job; the worker uses only registry-`approved` sources (choice pending with owner) and stores results as Lane B unverified records with source URL and dates; later searches read from the DB.
-- [ ] Staff review promotes records to researched (Lane A); nothing legally significant is published without review.
-- [ ] No SAMPLE data in production; buyer UI shows a "research in progress" state for queued searches.
+## M2.5 — On-demand research — **code done 2026-10-22** (review PASS); live smoke test pending — **owner: ANTHROPIC_API_KEY (D16)**
+- [x] A search with no DB match lets the buyer start a research job (POST); the worker uses only the registry-approved `anthropic-web-search` source (D16) and stores cited results as Lane B unverified records; later searches read from the DB.
+- [x] Anti-fabrication: every stored field appears verbatim in an API-returned citation for a search-result URL, co-located with the project name; portals excluded; K-RERA never fetched.
+- [x] Honest buyer states (researching / searched, none citable / unavailable); no stuck states; robots + noindex; cost caps.
+- [ ] Staff review promotes records to researched (Lane A) — next slice.
+- [ ] Live: key + run secret + scheduler (hosting PR #6), reference seed re-run, one staging smoke call.
 
 ## M3 — Manual research tooling for staff — **done 2026-10-21** (review PASS; Storage upload moved to M2)
 - [x] Admin forms to create or edit a project and add facts, each requiring ≥ 1 `SourceRef` (URL or document, observed date).

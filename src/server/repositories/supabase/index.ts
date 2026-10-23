@@ -7,9 +7,10 @@ import { SupabaseExternalListingRepository } from "./external-listings";
 import { SupabaseLeadRepository } from "./leads";
 import { SupabaseProjectRepository } from "./projects";
 import { SupabaseResearchRepository } from "./research";
+import { SupabaseResearchJobRepository } from "./research-jobs";
 import { SupabaseDocumentStorage } from "../../storage/documents";
 
-export { SupabaseProjectRepository, SupabaseExternalListingRepository, SupabaseLeadRepository, SupabaseResearchRepository };
+export { SupabaseProjectRepository, SupabaseExternalListingRepository, SupabaseLeadRepository, SupabaseResearchRepository, SupabaseResearchJobRepository };
 
 /** Validates env eagerly (clear error), creates the service-role client lazily on first use. */
 export function createSupabaseRepositories(): Repositories {
@@ -22,6 +23,7 @@ export function createSupabaseRepositories(): Repositories {
     projects: new SupabaseProjectRepository(anon),
     research: new SupabaseResearchRepository(serviceClient),
     externalListings: new SupabaseExternalListingRepository(anon, serviceClient),
+    researchJobs: new SupabaseResearchJobRepository(serviceClient),
     leads: new SupabaseLeadRepository(serviceClient),
     documentStorage: new SupabaseDocumentStorage(serviceClient),
   };

@@ -5,7 +5,7 @@ import { normalizeRecord, type DiscoveryAdapter, type DiscoveryQuery, type Norma
 import { createFixtureAdapter, filterRecords } from "./adapters/fixture-adapter";
 import { dedupe, type ReviewFlag } from "./dedupe";
 import { SAMPLE_RECORDS } from "./fixtures";
-import { SOURCE_REGISTRY, currentEnv, getSource, isRunnable, type RuntimeEnv, type SourceEntry } from "./registry";
+import { SOURCE_REGISTRY, currentEnv, getSource, isRunnable, isWebResearchSource, type RuntimeEnv, type SourceEntry } from "./registry";
 
 export const DEFAULT_LIMIT = 20;
 export const MAX_LIMIT = 50;
@@ -30,7 +30,8 @@ export interface DiscoveryReport {
 const clampLimit = (n?: number) => Math.max(0, Math.min(MAX_LIMIT, Math.floor(n ?? DEFAULT_LIMIT)));
 
 export function defaultAdapters(registry: readonly SourceEntry[] = SOURCE_REGISTRY): DiscoveryAdapter[] {
-  return registry.filter((s) => s.accessMethod === "fixture").map((s) => createFixtureAdapter(s.id));
+  // Web research sources are fed by research jobs, not by a search-time adapter.
+  return registry.filter((s) => s.accessMethod === "fixture" && !isWebResearchSource(s.id)).map((s) => createFixtureAdapter(s.id));
 }
 
 function finish(records: NormalizedRecord[], query: DiscoveryQuery, projects: readonly Project[]) {
@@ -97,7 +98,7 @@ export async function discoverExternal(query: DiscoveryQuery, opts: DiscoverOpti
 export function discoverSampleSync(query: DiscoveryQuery, opts: { env?: RuntimeEnv; now?: Date } = {}): ExternalListing[] {
   const env = opts.env ?? currentEnv();
   const now = opts.now ?? new Date();
-  const records = SOURCE_REGISTRY.filter((s) => s.accessMethod === "fixture" && isRunnable(s, env)).flatMap((s) =>
+  const records = SOURCE_REGISTRY.filter((s) => s.accessMethod === "fixture" && !isWebResearchSource(s.id) && isRunnable(s, env)).flatMap((s) =>
     filterRecords(SAMPLE_RECORDS, s.id, query).map((r) => normalizeRecord(r, s, now)),
   );
   return finish(records, query, []).listings;

@@ -4,7 +4,11 @@ import { Suspense } from "react";
 import { connection } from "next/server";
 import { Info } from "lucide-react";
 import { getLocality, listLocalities } from "@/config/markets";
-import { searchProperties } from "@/server/services/search";
+import { headers } from "next/headers";
+import { isSearchMiss, searchProperties } from "@/server/services/search";
+import { lookupResearchOnMiss } from "@/server/services/research-jobs";
+import { ResearchNotice } from "@/components/research/research-notice";
+import { ResearchTrigger } from "@/components/research/research-trigger";
 import { Alert, AlertTitle } from "@/components/ui/alert";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/components/ui/cn";
@@ -17,10 +21,16 @@ import { ProjectCard } from "@/components/property/project-card";
 import { LocalitySearch } from "@/components/site/locality-search";
 import { ResultsSkeleton } from "./results-skeleton";
 
-export const metadata: Metadata = {
+const BASE_METADATA: Metadata = {
   title: "Browse projects",
   description: "Researched and externally discovered residential projects in North Bengaluru.",
 };
+
+/** Free-text result pages are not indexed (crawlers must not trigger or surface research). */
+export async function generateMetadata({ searchParams }: PageProps<"/projects">): Promise<Metadata> {
+  const q = first((await searchParams).q);
+  return q ? { ...BASE_METADATA, robots: { index: false, follow: true } } : BASE_METADATA;
+}
 
 function first(v: string | string[] | undefined): string {
   return (Array.isArray(v) ? v[0] : v)?.trim() ?? "";
@@ -76,6 +86,11 @@ async function Results({ searchParams }: { searchParams: PageProps<"/projects">[
   });
   const { researched, external, externalErrors, notes, matchedProjects } = result;
   const total = researched.length + external.length;
+  // A free-text miss in both lanes may use on-demand web research. This GET render only READS the
+  // research state; starting research is a POST (ResearchTrigger → Server Action).
+  const research = isSearchMiss(result, q)
+    ? await lookupResearchOnMiss({ queryText: q, localityId: locality || null, userAgent: (await headers()).get("user-agent") })
+    : null;
   const filterText = [bhk ? `${bhk} BHK` : "", status ? CONSTRUCTION_STATUS_LABELS[status] : ""].filter(Boolean).join(", ");
 
   return (
@@ -91,6 +106,14 @@ async function Results({ searchParams }: { searchParams: PageProps<"/projects">[
         {q ? ` matching “${q}”` : ""}
         {filterText ? ` (${filterText})` : ""}.
       </p>
+
+      {research?.state === "can_start" ? (
+        <ResearchTrigger queryText={research.queryText} localityId={research.localityId} />
+      ) : research?.state === "searched_none" ? (
+        <ResearchNotice state={{ status: "searched_none", queryText: research.queryText, searchedAt: research.searchedAt }} />
+      ) : research ? (
+        <ResearchNotice state={{ status: research.state, queryText: research.queryText }} />
+      ) : null}
 
       {notes?.length ? (
         <Alert tone="info" role="status">

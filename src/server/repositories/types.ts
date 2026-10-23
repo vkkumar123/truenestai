@@ -41,8 +41,19 @@ export interface ProjectRepository {
   findPublishedProjectsByRera(numbers: string[]): Promise<Project[]>;
 }
 
+export interface StoredListingFilter {
+  /** Only listings from these sources. */
+  sourceIds: string[];
+  /** Case-insensitive substring of title or developer name. */
+  text?: string;
+  localityId?: string;
+  limit?: number;
+}
+
 export interface ExternalListingRepository {
   getById(id: string): Promise<ExternalListing | null>;
+  /** Stored listings (most recently seen first). Used to serve earlier research results. */
+  search(filter: StoredListingFilter): Promise<ExternalListing[]>;
   /** Insert or update by (sourceId, sourceRecordId), falling back to id. Returns stored rows. */
   upsertMany(listings: ExternalListing[]): Promise<ExternalListing[]>;
 }
@@ -196,11 +207,89 @@ export interface ResearchRepository {
   listAudit(projectId: string): Promise<StaffAuditEntry[]>;
 }
 
+// ---- M2.5: on-demand research jobs (docs/RESEARCH_WORKER.md) ----
+
+export type ResearchJobStatus = "queued" | "running" | "done" | "no_results" | "failed";
+
+/** A research job. queryText is the buyer's raw query: staff-visible, never logged. */
+export interface ResearchJob {
+  id: string;
+  queryText: string;
+  queryKey: string;
+  localityId: string | null;
+  status: ResearchJobStatus;
+  attempts: number;
+  requestedAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  resultCount: number;
+  errorCode: string | null;
+}
+
+export interface EnqueueResearchInput {
+  queryText: string;
+  queryKey: string;
+  localityId: string | null;
+  requesterIpHash: string | null;
+  /** A done/no_results job for the same key finished within this many hours is reused. */
+  cacheHours: number;
+  /** Global cap on jobs requested in the last 24 hours. */
+  maxPerDay: number;
+  /** Cap per requesterIpHash in the last 24 hours (ignored when the hash is null). */
+  maxPerRequesterPerDay: number;
+}
+
+export type EnqueueResearchResult =
+  | { outcome: "queued"; job: ResearchJob }
+  | { outcome: "active"; job: ResearchJob } // already queued or running
+  | { outcome: "cached"; job: ResearchJob } // done/no_results within the cache TTL
+  | { outcome: "failed_recently"; job: ResearchJob } // failed (incl. stalled) within 6 hours
+  | { outcome: "daily_cap" }
+  | { outcome: "requester_cap" };
+
+export interface FinishResearchInput {
+  status: "done" | "no_results" | "failed" | "queued"; // queued = retry later
+  resultCount: number;
+  errorCode: string | null;
+  listingIds: string[];
+}
+
+export interface ResearchJobWithListings extends ResearchJob {
+  listings: ExternalListing[];
+}
+
+/** Queued jobs not picked up for this long are failed with error_code 'stalled' on the next enqueue. */
+export const RESEARCH_STALL_MINUTES = 30;
+/** A failed job for a key blocks re-research of that key for this long ("unavailable"). */
+export const RESEARCH_FAILURE_COOLDOWN_HOURS = 6;
+
+/**
+ * Research job queue (service role only in Supabase). enqueue and claim are atomic in SQL
+ * (research_enqueue / research_claim_jobs with FOR UPDATE SKIP LOCKED).
+ */
+export interface ResearchJobRepository {
+  enqueue(input: EnqueueResearchInput): Promise<EnqueueResearchResult>;
+  /** Newest jobs for this key first (read-only; for rendering the page state without side effects). */
+  listForQuery(queryKey: string, limit: number): Promise<ResearchJob[]>;
+  /**
+   * Marks up to `limit` queued jobs (and running jobs stale for staleMinutes with a retry left)
+   * running; attempts + 1. Stale running jobs with attempts >= 2 become failed ('abandoned').
+   */
+  claim(limit: number, staleMinutes: number): Promise<ResearchJob[]>;
+  /** Records the outcome and links the stored listings. Only a running job can be finished. */
+  finish(id: string, input: FinishResearchInput): Promise<ResearchJob | null>;
+  /** Listings of the newest done job for queryKey finished within cacheHours (empty if none). */
+  listingsForQuery(queryKey: string, cacheHours: number): Promise<ExternalListing[]>;
+  /** Newest first, with linked listings. Staff only (callers enforce the session). */
+  listRecent(limit: number): Promise<ResearchJobWithListings[]>;
+}
+
 export interface Repositories {
   backend: "fixture" | "supabase";
   projects: ProjectRepository;
   research: ResearchRepository;
   externalListings: ExternalListingRepository;
+  researchJobs: ResearchJobRepository;
   leads: LeadRepository;
   /** Object storage for project documents (private; server-side access only). */
   documentStorage: DocumentStorage;

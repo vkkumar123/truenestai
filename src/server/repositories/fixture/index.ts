@@ -5,20 +5,23 @@ import { FixtureExternalListingRepository } from "./external-listings";
 import { FixtureLeadRepository } from "./leads";
 import { FixtureProjectRepository } from "./projects";
 import { FixtureResearchRepository } from "./research";
+import { FixtureResearchJobRepository } from "./research-jobs";
 import { SAMPLE_PROJECTS } from "./sample-projects";
 import { FixtureDocumentStorage } from "../../storage/documents";
 
-export { FixtureProjectRepository, FixtureExternalListingRepository, FixtureLeadRepository, FixtureResearchRepository };
+export { FixtureProjectRepository, FixtureExternalListingRepository, FixtureLeadRepository, FixtureResearchRepository, FixtureResearchJobRepository };
 export { SAMPLE_PROJECTS };
 
 /** Public reads and staff writes share one mutable copy of the sample projects. */
 export function createFixtureRepositories(): Repositories {
   const store: Project[] = structuredClone([...SAMPLE_PROJECTS]);
+  const externalListings = new FixtureExternalListingRepository();
   return {
     backend: "fixture",
     projects: new FixtureProjectRepository(store),
     research: new FixtureResearchRepository(store),
-    externalListings: new FixtureExternalListingRepository(),
+    externalListings,
+    researchJobs: new FixtureResearchJobRepository(externalListings),
     leads: new FixtureLeadRepository(),
     documentStorage: new FixtureDocumentStorage(),
   };

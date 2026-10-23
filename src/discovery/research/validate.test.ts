@@ -72,7 +72,10 @@ describe("research validator (anti-fabrication)", () => {
 
   it("drops a search-result URL with no citation, and citations pointing elsewhere do not count", () => {
     const r = validateCandidates([good], evidence([{ url: URL_B, citedText: CITED_A }]));
-    expect(r.dropped).toEqual({ no_citation: 1 });
+    // URL_A has a returned title ("SAMPLE") but it does not name the project, and no citation.
+    expect(r.dropped).toEqual({ name_not_cited: 1 });
+    const noTitle = extractEvidence([fakeSearchResult([{ url: URL_A, title: "" }]), fakeCitedText("prose", [{ url: URL_B, citedText: CITED_A }])]);
+    expect(validateCandidates([good], noTitle).dropped).toEqual({ no_citation: 1 });
   });
 
   it("drops non-https URLs", () => {
@@ -189,15 +192,49 @@ describe("M1: facts must be cited next to the candidate's name", () => {
     expect(r.fieldsDropped).toEqual({ priceText: 1 });
   });
 
-  it("drops a locality that is cited only away from the name", () => {
-    const r = validateCandidates(
+  it("accepts a locality cited elsewhere on the same page, but not one cited only on another page", () => {
+    const samePage = validateCandidates(
       [{ ...good, address: null }],
       evidence([
         { url: URL_A, citedText: "SAMPLE Alpha Homes by SAMPLE Builder Co." },
-        { url: URL_A, citedText: `Other projects in ${LOC.name}.` },
+        { url: URL_A, citedText: `Located in ${LOC.name}.` },
       ]),
     );
-    expect(r.dropped).toEqual({ locality_not_cited: 1 });
+    expect(samePage.accepted).toHaveLength(1);
+    expect(samePage.accepted[0].localityId).toBe(LOC.id);
+    const otherPage = validateCandidates(
+      [{ ...good, address: null }],
+      evidence([
+        { url: URL_A, citedText: "SAMPLE Alpha Homes by SAMPLE Builder Co." },
+        { url: URL_B, citedText: `Located in ${LOC.name}.` },
+      ]),
+    );
+    expect(otherPage.dropped).toEqual({ locality_not_cited: 1 });
+  });
+
+  it("uses the page title the search tool returned as evidence for the name and locality", () => {
+    const ev = extractEvidence([
+      fakeSearchResult([{ url: URL_A, title: `SAMPLE Alpha Homes | Apartments in ${LOC.name}` }]),
+      fakeCitedText("prose", [{ url: URL_A, citedText: "3 BHK homes by SAMPLE Builder Co. Price ₹ 95 Lakh onwards." }]),
+    ]);
+    const r = validateCandidates([{ ...good, address: null, reraNumbers: [] }], ev);
+    expect(r.accepted).toHaveLength(1);
+    expect(r.accepted[0]).toMatchObject({ title: "SAMPLE Alpha Homes", localityId: LOC.id, developerName: "SAMPLE Builder Co", priceText: "₹ 95 Lakh onwards" });
+    // A fact that is on no citation of that page is still dropped.
+    const r2 = validateCandidates([{ ...good, address: null, reraNumbers: [], priceText: "₹ 80 Lakh onwards" }], ev);
+    expect(r2.accepted[0].priceText).toBeNull();
+    expect(r2.fieldsDropped).toMatchObject({ priceText: 1 });
+    // A title that does not name the project is not evidence for it.
+    const r3 = validateCandidates([{ ...good, name: "SAMPLE Beta Towers", address: null }], ev);
+    expect(r3.dropped).toEqual({ name_not_cited: 1 });
+  });
+
+  it("treats '&' and 'and' as the same word in names", () => {
+    const r = validateCandidates(
+      [{ ...good, name: "SAMPLE Sun & Sanctum", address: null, reraNumbers: [], priceText: null, developerName: null }],
+      evidence([{ url: URL_A, citedText: `SAMPLE Sun and Sanctum is in ${LOC.name}.` }]),
+    );
+    expect(r.accepted).toHaveLength(1);
   });
 
   it("drops a candidate whose page cites more than one registration number", () => {

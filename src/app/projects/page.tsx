@@ -92,6 +92,9 @@ async function Results({ searchParams }: { searchParams: PageProps<"/projects">[
     ? await lookupResearchOnMiss({ queryText: q, localityId: locality || null, userAgent: (await headers()).get("user-agent") })
     : null;
   const filterText = [bhk ? `${bhk} BHK` : "", status ? CONSTRUCTION_STATUS_LABELS[status] : ""].filter(Boolean).join(", ");
+  // Web research only runs for an unfiltered search of all results. When filters or
+  // "researched only" kept it from running, offer the same search without them.
+  const broaden = q && total === 0 && !result.externalQueried ? withCompare("/projects", { locality: locality || undefined, q }, []) : null;
 
   return (
     <div className="space-y-8">
@@ -113,6 +116,16 @@ async function Results({ searchParams }: { searchParams: PageProps<"/projects">[
         <ResearchNotice state={{ status: "searched_none", queryText: research.queryText, searchedAt: research.searchedAt }} />
       ) : research ? (
         <ResearchNotice state={{ status: research.state, queryText: research.queryText }} />
+      ) : null}
+
+      {broaden ? (
+        <Alert tone="info" role="status">
+          <AlertTitle>Search all results to research “{q}”</AlertTitle>
+          <p>
+            Your filters limit this search to projects TrueNest has already researched.{" "}
+            <Link href={broaden}>Search all results for “{q}”</Link> and we’ll look it up on public web sources.
+          </p>
+        </Alert>
       ) : null}
 
       {notes?.length ? (

@@ -66,7 +66,8 @@ d("fact store (0006)", () => {
         ('sample-builder', 'SAMPLE Builder Site', 'developer', 'proposed', 'manual', 'https://example.com/'),
         ('sample-regulator', 'SAMPLE Regulator', 'regulator', 'proposed', 'link_out_only', 'https://example.org/'),
         ('sample-news', 'SAMPLE News', 'news', 'proposed', 'manual', 'https://example.org/'),
-        ('sample-rejected-dev', 'SAMPLE Rejected Builder', 'developer', 'rejected', 'manual', 'https://example.com/');
+        ('sample-rejected-dev', 'SAMPLE Rejected Builder', 'developer', 'rejected', 'manual', 'https://example.com/'),
+        ('sample-web-research', 'SAMPLE Web Research', 'fixture', 'approved', 'fixture', 'https://example.com/');
       insert into sources (id, name, type, status, access_method, homepage, terms_reviewed_at) values
         ('anthropic-web-search', 'Web research', 'developer', 'approved', 'api', 'https://www.anthropic.com/', '2026-10-22');
       insert into staff_profiles (user_id, role) values ('${STAFF_UID}', 'admin');
@@ -130,6 +131,24 @@ d("fact store (0006)", () => {
       return (await q.query("select to_jsonb(f) as j from facts_current f where entity_id = 'p1'")).rows[0].j;
     }));
     expect(mapFactsCurrentRow(row).fact.estimateBasis?.sources[0].sourceId).toBe("anthropic-web-search");
+  });
+
+  it("truth is derived at read time: a stored 'estimated' does not hide a later official source", async () => {
+    const r = await asRole(c, "service_role", null, async (q) => {
+      await q.query(`
+        insert into facts (id, project_id, field, value, status) values ('f-drift', 'p4', 'declared_possession', '"2028-03 (test)"', 'known');
+        insert into fact_sources (fact_id, source_id, url, observed_at) values ('f-drift', 'sample-news', 'https://example.org/p4/news', '2026-09-01T00:00:00Z');
+        update facts set truth_status = 'estimated' where id = 'f-drift';
+        insert into fact_sources (fact_id, source_id, url, observed_at) values ('f-drift', 'sample-builder', 'https://example.com/p4/brochure', '2026-09-02T00:00:00Z');`);
+      const current = (await q.query("select truth_status, source_id from facts_current where entity_id = 'p4'")).rows;
+      const stored = (await q.query("select truth_status from facts where id = 'f-drift'")).rows[0].truth_status;
+      await q.query("update facts set is_current = false where id = 'f-drift'");
+      const history = (await q.query("select truth_status from facts_history where fact_id = 'f-drift'")).rows;
+      return { current, stored, history };
+    });
+    expect(r.stored).toBe("estimated"); // H2: never relabelled by hand ...
+    expect(r.current).toEqual([{ truth_status: "official", source_id: "sample-builder" }]); // ... but read-time truth follows the sources
+    expect(r.history).toEqual([{ truth_status: "official" }]);
   });
 
   it("M3: the representative source of a curated fact is the official-qualifying one, even when older", async () => {
@@ -355,6 +374,10 @@ d("fact store (0006)", () => {
       ["known without source_url", { source_url: null }, "23514"],
       ["unknown with a value", { status: "unknown" }, "23514"],
       ["estimate without basis", { status: "estimated" }, "23514"],
+      ["estimate basis without sources", { status: "estimated", estimate_basis: "{}" }, "23514"],
+      ["estimate basis with empty sources", { status: "estimated", estimate_basis: '{"sources":[]}' }, "23514"],
+      ["estimate basis with non-array sources", { status: "estimated", estimate_basis: '{"sources":"https://example.org/x"}' }, "23514"],
+      ["web research source not typed search", { status: "unknown", value_date: null, source_url: null, source_id: "sample-web-research", source_type: "news" }, "23514"],
       ["basis on an official row", { estimate_basis: "{}" }, "23514"],
       ["excerpt over 20 words", { excerpt: Array.from({ length: 21 }, (_, i) => `w${i}`).join(" ") }, "23514"],
       ["wrong value kind", { value_date: null, value_text: "December 2026" }, "23514"],
@@ -368,6 +391,10 @@ d("fact store (0006)", () => {
       const ins = obs(o);
       expect((await errorAs(c, "service_role", null, ins.sql, ins.params))?.code, name).toBe(code);
     }
+    const estimate = obs({ status: "estimated", source_type: "news", estimate_basis: '{"sources":[{"sourceId":"sample-news","url":"https://example.org/x","observedAt":"2026-09-01T00:00:00Z"}]}' });
+    expect(await errorAs(c, "service_role", null, estimate.sql, estimate.params)).toBeNull();
+    const web = obs({ status: "unknown", value_date: null, source_url: null, source_id: "sample-web-research", source_type: "search" });
+    expect(await errorAs(c, "service_role", null, web.sql, web.params)).toBeNull();
     const locality = obs({ entity_type: "locality", entity_id: "hebbal", attribute: "flooding_note", value_date: null, value_text: "SAMPLE note" });
     expect(await errorAs(c, "service_role", null, locality.sql, locality.params)).toBeNull();
   });
@@ -438,9 +465,33 @@ d("fact store (0006)", () => {
     ]) {
       expect((await errorAs(c, "service_role", null, sql))?.code, sql).toBe("42501");
     }
-    // allowed: supersede (is_current), verification, last_verified_at, ttl_hours
+    // allowed: supersede (is_current), last_verified_at, ttl_hours
     expect(await errorAs(c, "service_role", null,
-      "update facts set is_current = false, verification = 'reviewed', ttl_hours = 24, last_verified_at = now() where id = 'f-dev'")).toBeNull();
+      "update facts set is_current = false, ttl_hours = 24, last_verified_at = now() where id = 'f-dev'")).toBeNull();
+    // verification changes only through the audited RPCs (tn.via_rpc), never by a direct UPDATE
+    for (const sql of [
+      "update facts set verification = 'reviewed' where id = 'f-dev'",
+      "update facts set verification = 'disputed', ttl_hours = 1 where id = 'f-news'",
+    ]) {
+      expect((await errorAs(c, "service_role", null, sql))?.code, sql).toBe("42501");
+    }
+    // the RPC clears the flag after its own UPDATE, so a direct update later in the same transaction is still refused
+    const viaRpcThenDirect = await asRole(c, "service_role", null, async (q) => {
+      const ok = await q.query(
+        "select public.research_set_verification('p2', 'declared_possession', 'f-dev', 'unverified', 'disputed', $1, 'admin', null) as r",
+        [STAFF_UID],
+      );
+      await q.query("savepoint s");
+      let code: string | undefined;
+      try {
+        await q.query("update facts set verification = 'reviewed' where id = 'f-dev'");
+      } catch (e) {
+        code = (e as { code?: string }).code;
+      }
+      await q.query("rollback to savepoint s");
+      return { status: ok.rows[0].r.status, verification: (await q.query("select verification from facts where id = 'f-dev'")).rows[0].verification, code };
+    });
+    expect(viaRpcThenDirect).toEqual({ status: "ok", verification: "disputed", code: "42501" });
     // H2: truth_status is set once, to the derived value only — never relabelled by hand
     for (const sql of [
       "update facts set truth_status = 'estimated' where id = 'f-dev'",  // official → estimated

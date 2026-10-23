@@ -247,9 +247,9 @@ is registered as type `developer`, but a search result is never an official figu
 | Object | What it holds |
 |---|---|
 | `fact_attributes` | The spec 02 attribute catalogue (39 rows: 28 project, 5 development, 6 locality). Schema metadata only: `value_kind`, `unit`, `default_ttl_hours` (assumptions), `legally_significant` (**proposed** for C7, `legal_flag_status = 'proposed'`), `legacy_field` (`declared_possession` → `promised_possession`). TS mirror: `FACT_ATTRIBUTES` in `src/server/repositories/fact-store.ts` (unit test compares it to the SQL seed). |
-| `fact_observations` | One row per `(entity_type, entity_id, attribute, source_url)` (`unique nulls not distinct`), written by automation (`added_by` crawl / research / extraction) or staff. Entity types `project`, `locality` for now (existence checked by trigger). `value_text/num/date/json` must match the catalogue `value_kind`; `unknown` carries no value; a known value needs an `https` `source_url`; `estimate_basis` is required for, and only for, `estimated`; `official` requires `source_type` in rera / builder / govt / fixture; `excerpt` ≤ 20 words; `last_verified_at ≥ observed_at`; `ttl_hours > 0`. **Every row is `unverified`** (CHECK `fact_observations_unverified_only`, staff rows included) until a staff RPC with an actor and an audit event exists. Identity columns, `added_by` and `is_sample` never change; for a project, `is_sample` must equal the project's at insert. |
+| `fact_observations` | One row per `(entity_type, entity_id, attribute, source_url)` (`unique nulls not distinct`), written by automation (`added_by` crawl / research / extraction) or staff. Entity types `project`, `locality` for now (existence checked by trigger). `value_text/num/date/json` must match the catalogue `value_kind`; `unknown` carries no value; a known value needs an `https` `source_url`; `estimate_basis` is required for, and only for, `estimated`, and must hold a non-empty `sources` array; a web research source always writes `source_type = 'search'`; `official` requires `source_type` in rera / builder / govt / fixture; `excerpt` ≤ 20 words; `last_verified_at ≥ observed_at`; `ttl_hours > 0`. **Every row is `unverified`** (CHECK `fact_observations_unverified_only`, staff rows included) until a staff RPC with an actor and an audit event exists. Identity columns, `added_by` and `is_sample` never change; for a project, `is_sample` must equal the project's at insert. |
 | `fact_observations_history` | The OLD row of every UPDATE/DELETE on `fact_observations` (no-op upserts skipped), with `operation` and `superseded_at`. Written only by a `security definer` trigger. |
-| `facts` (curated) | New nullable `truth_status`, `last_verified_at`, `ttl_hours`. Backfilled: an official source (above) → `official`, any other source (or none) → `estimated`, `unknown` stays `unknown`; `last_verified_at` = latest `fact_sources.observed_at`. Rows written later with a null truth status get the same rule at read time (`tn_curated_truth_status`). |
+| `facts` (curated) | New nullable `truth_status`, `last_verified_at`, `ttl_hours`. Backfilled: an official source (above) → `official`, any other source (or none) → `estimated`, `unknown` stays `unknown`; `last_verified_at` = latest `fact_sources.observed_at`. The views always **derive truth at read time** with `tn_curated_truth_status` (the stored value is only a fallback), so a stored value cannot go stale when sources are added or the registry changes. |
 | `facts_current` (view) | One row per `(entity_type, entity_id, attribute)` over live observations **plus** current curated project facts whose field maps via `legacy_field`; a known curated value **without a source is left out** (constitution §1). Precedence: a curated value that is **known** and `source_confirmed`/`reviewed` wins; otherwise official > estimated > unknown, then newest `observed_at`, then id. Every other live row is listed in `conflicts jsonb` (with `conflict_count`, `has_disagreement`), never hidden (constitution §3). For a date attribute an ISO date held as text is served and compared as a date (`tn_try_date`). `is_stale` = `last_verified_at + ttl_hours < now()`: an `unknown` inside its TTL is not stale, so it suppresses re-research. `requires_review` = legally significant and not `source_confirmed`/`reviewed` (C7, proposed). A curated row's representative source is an official-qualifying one when there is one, then the newest; its `source_type` is mapped by `tn_spec_source_type(id, type)` (web research → search, regulator → rera, government → govt, developer → builder, listing_portal → portal). An estimated curated row's `estimate_basis` is `{sources: [...]}` from its `fact_sources`. |
 | `facts_history` (view) | `fact_observations_history` rows plus superseded curated rows (`is_current = false`, `operation = 'SUPERSEDED'`, `superseded_at` = the next row's `created_at`), with the same representative-source rule. |
 
@@ -262,8 +262,12 @@ is registered as type `developer`, but a search result is never an official figu
 - `facts_guard` trigger on curated `facts`: `id`, `project_id`, `unit_id`, `field`, `value`, `status`,
   `created_at` never change in place (a new value is a new row via `research_set_fact`), and direct DELETE is
   refused. `truth_status` can only be set once, from null to the derived `tn_curated_truth_status` value; any
-  other change is refused, so nobody can relabel a fact official by hand. `is_current`, `verification`,
-  `last_verified_at` and `ttl_hours` may change. A cascade from deleting the project or unit (RI trigger,
+  other change is refused, so nobody can relabel a fact official by hand. `verification` may change only
+  inside the audited RPCs: `research_set_verification` and `research_set_fact` (redefined in 0006 with
+  otherwise identical bodies) set the transaction-local flag `tn.via_rpc` around their own UPDATE and clear it
+  right after; a direct UPDATE of `verification` is refused for every role. The flag guards against accidental
+  direct writes by server code; it is not a security boundary (any role that can run SQL can set it).
+  `is_current`, `last_verified_at` and `ttl_hours` may change. A cascade from deleting the project or unit (RI trigger,
   `pg_trigger_depth() > 1`) is still allowed, so SAMPLE data can be removed before marking production.
 - Marking a database production (`src/server/db/migrate.ts`) is refused while any SAMPLE project **or SAMPLE
   fact observation** exists (observations have no FK to the project, so they survive deleting it).
@@ -278,16 +282,14 @@ Public read through filtered views comes with the rendering slice.
 **Server read model:** `FactStoreRepository` (`getRepositories().factStore`, read-only): `listCurrent(entityType,
 entityId)` and `getCurrent(entityType, entityId, attribute)` return `CurrentFact` rows whose `fact` is a
 `FactValue` with `truth`, `lastVerifiedAt`, `ttlHours`, `conflicts`, and `estimateBasis` for an estimate. The
-mapper **throws** on an estimated row without a well-formed basis. Supabase: service-role client over
+mapper **throws** on an estimated row without a well-formed basis; `listCurrent`/`getCurrent` skip such a row
+and log `fact_store_row_skipped` with its id only (no values, sources or PII), so one bad row never hides an
+entity's other facts. Supabase: service-role client over
 `facts_current`, rows validated with zod. Fixture: fictional SAMPLE observations for `sample-proj-lakeview` plus
 the curated `declaredPossession` of the SAMPLE projects, resolved by `resolveFactsCurrent` (TS mirror of the
 view's rules). Tests: `tests/db/fact-store.test.ts`, `src/server/repositories/fact-store.test.ts`.
 
 **Tracked open items:**
-- **Direct `verification` updates predate S1a.** `service_role` has had UPDATE on `facts.verification` since
-  0001/0002, and the guard still allows it, so a server bug could change verification outside the audited
-  `research_set_verification` RPC (D12/D13). Closing it (verification changes only through the RPC, enforced in
-  SQL) is a follow-up; S1a does not change that existing behaviour.
 - **The approved-source check belongs to S2a.** `fact_observations.source_id` only references the registry;
   nothing in SQL refuses observations from a source that is not `approved` yet. That check ships with
   `crawl_targets` in S2a (plan §5: a target whose registry source is not approved cannot be scheduled).

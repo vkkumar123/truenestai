@@ -1,6 +1,7 @@
 import "server-only";
 import { z } from "zod";
 import type { FactConflict, FactEstimateBasis, FactTruthStatus, FactValue, SourceRef, VerificationState } from "@/domain/types";
+import { log } from "../log";
 
 // S1a fact store (supabase/migrations/0006_fact_store.sql, D18 proposed): the attribute catalogue
 // mirror, the facts_current row shape, the precedence rule (used by the fixture; SQL is
@@ -231,6 +232,23 @@ export function mapFactsCurrentRow(input: unknown): CurrentFact {
     isStale: r.is_stale,
     hasDisagreement: r.has_disagreement,
   };
+}
+
+/**
+ * Maps many rows, skipping (and logging) any row that fails validation, so one malformed row never
+ * hides an entity's other facts. The log carries only the row's id: no values, sources or PII.
+ */
+export function mapFactsCurrentRows(rows: readonly unknown[]): CurrentFact[] {
+  const out: CurrentFact[] = [];
+  for (const row of rows) {
+    try {
+      out.push(mapFactsCurrentRow(row));
+    } catch {
+      const id = (row as { fact_id?: unknown } | null)?.fact_id;
+      log.warn("fact_store_row_skipped", { factId: typeof id === "string" ? id.slice(0, 64) : null });
+    }
+  }
+  return out;
 }
 
 // ---- precedence (TS mirror of the facts_current view; the fixture uses it) ----

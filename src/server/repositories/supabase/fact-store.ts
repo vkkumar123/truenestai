@@ -5,7 +5,7 @@ import {
   factAttributeSchema,
   factEntityIdSchema,
   factEntityTypeSchema,
-  mapFactsCurrentRow,
+  mapFactsCurrentRows,
   type CurrentFact,
   type FactEntityType,
 } from "../fact-store";
@@ -27,7 +27,7 @@ export class SupabaseFactStoreRepository implements FactStoreRepository {
       .eq("entity_id", factEntityIdSchema.parse(entityId))
       .order("attribute", { ascending: true });
     if (error) throw new Error(`facts_current read failed (${error.code ?? "unknown"})`);
-    return (data ?? []).map(mapFactsCurrentRow);
+    return mapFactsCurrentRows(data ?? []);
   }
 
   async getCurrent(entityType: FactEntityType, entityId: string, attribute: string): Promise<CurrentFact | null> {
@@ -39,6 +39,6 @@ export class SupabaseFactStoreRepository implements FactStoreRepository {
       .eq("attribute", factAttributeSchema.parse(attribute))
       .maybeSingle();
     if (error) throw new Error(`facts_current read failed (${error.code ?? "unknown"})`);
-    return data ? mapFactsCurrentRow(data) : null;
+    return data ? (mapFactsCurrentRows([data])[0] ?? null) : null;
   }
 }

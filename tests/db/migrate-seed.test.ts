@@ -171,6 +171,8 @@ d("migration runner + seed", () => {
     try {
       // 1) every RERA fact reviewed; 2) every address disputed; 3) sources removed from possession;
       // 4) all unit prices unknown.
+      // 0006: verification changes only inside the audited RPCs (tn.via_rpc); this test stages states directly
+      await c.query("select set_config('tn.via_rpc', 'on', true)");
       await c.query("update facts set verification = 'reviewed' where field = 'rera_numbers' and is_current");
       await c.query("update facts set verification = 'disputed' where field = 'address' and is_current");
       await c.query("delete from fact_sources where fact_id in (select id from facts where field = 'declared_possession')");

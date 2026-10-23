@@ -260,6 +260,21 @@ describe("SupabaseFactStoreRepository", () => {
     expect(calls.slice(2, 4).map((c) => c[1])).toEqual([["entity_type", "project"], ["entity_id", "sample-p1"]]);
   });
 
+  it("a malformed row is skipped and logged by id only; the entity's other facts still load", async () => {
+    const { log } = await import("../log");
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const bad = { ...row, fact_id: "bad-row-1", attribute: "oc_status", truth_status: "estimated", estimate_basis: null, value_text: "SECRET-VALUE" };
+    const { client } = fakeClient({ data: [row, bad], error: null });
+    const repo = new SupabaseFactStoreRepository(() => client);
+    const facts = await repo.listCurrent("project", "sample-p1");
+    expect(facts.map((f) => f.attribute)).toEqual(["promised_possession"]);
+    expect(warn).toHaveBeenCalledWith("fact_store_row_skipped", { factId: "bad-row-1" });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("SECRET-VALUE");
+    const single = fakeClient({ data: bad, error: null });
+    expect(await new SupabaseFactStoreRepository(() => single.client).getCurrent("project", "sample-p1", "oc_status")).toBeNull();
+    warn.mockRestore();
+  });
+
   it("getCurrent returns null when absent; errors carry only the code", async () => {
     const empty = fakeClient({ data: null, error: null });
     expect(await new SupabaseFactStoreRepository(() => empty.client).getCurrent("project", "sample-p1", "oc_status")).toBeNull();

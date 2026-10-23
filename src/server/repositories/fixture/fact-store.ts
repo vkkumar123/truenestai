@@ -6,7 +6,7 @@ import {
   factEntityIdSchema,
   factEntityTypeSchema,
   getFactAttribute,
-  mapFactsCurrentRow,
+  mapFactsCurrentRows,
   resolveFactsCurrent,
   tryIsoDate,
   type CurrentFact,
@@ -167,7 +167,7 @@ export class FixtureFactStoreRepository implements FactStoreRepository {
       ...this.observations,
       ...(type === "project" ? curatedCandidates(this.projects.filter((p) => p.id === id)) : []),
     ].filter((c) => c.entity_type === type && c.entity_id === id);
-    return resolveFactsCurrent(candidates, this.clock()).map(mapFactsCurrentRow);
+    return mapFactsCurrentRows(resolveFactsCurrent(candidates, this.clock()));
   }
 
   async getCurrent(entityType: FactEntityType, entityId: string, attribute: string): Promise<CurrentFact | null> {

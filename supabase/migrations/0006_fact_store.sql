@@ -33,6 +33,15 @@ language sql immutable as $$
 $$;
 grant execute on function public.tn_is_truth_status(text) to service_role;
 
+-- Web research sources (src/discovery/registry.ts WEB_RESEARCH_SOURCE_IDS; KEEP IN SYNC, a unit
+-- test compares them). Their registry type is `developer`, but a web-search result is not an
+-- official figure (H1).
+create or replace function public.tn_is_web_research_source(p_id text) returns boolean
+language sql immutable as $$
+  select p_id in ('anthropic-web-search','sample-web-research')
+$$;
+grant execute on function public.tn_is_web_research_source(text) to service_role;
+
 -- ---------------------------------------------------------------------------
 -- Attribute catalogue (spec 02). Schema metadata only. `legally_significant` flags are PROPOSED
 -- for C7 (Fury confirms): such attributes show only after staff review. default_ttl_hours values
@@ -139,14 +148,20 @@ create table public.fact_observations (
     or (status <> 'unknown' and source_url is not null
         and (value_text is not null or value_num is not null or value_date is not null or value_json is not null))),
   -- an estimate always carries its basis; nothing else does (constitution §2)
-  constraint fact_observations_estimate_basis check ((status = 'estimated') = (estimate_basis is not null)),
+  constraint fact_observations_estimate_basis check (
+    (status = 'estimated') = (estimate_basis is not null)
+    and (estimate_basis is null or (case when jsonb_typeof(estimate_basis -> 'sources') = 'array'
+                                         then jsonb_array_length(estimate_basis -> 'sources') > 0 else false end))),
   constraint fact_observations_verified_after_observed check (last_verified_at >= observed_at),
   -- C7 / plan §5.4: automation can never raise verification. Until a staff RPC with an actor and an
   -- audit event exists, NO observation may be anything but unverified (staff rows included).
   constraint fact_observations_unverified_only check (verification = 'unverified'),
   -- constitution §2: official = the builder, RERA or a government body (fixture for SAMPLE rows)
   constraint fact_observations_official_source_type check (
-    status <> 'official' or source_type in ('rera','builder','govt','fixture'))
+    status <> 'official' or source_type in ('rera','builder','govt','fixture')),
+  -- a web research source (tn_is_web_research_source, defined below) always writes source_type 'search'
+  constraint fact_observations_web_research_is_search check (
+    not public.tn_is_web_research_source(source_id) or source_type = 'search')
 );
 create index fact_observations_entity_idx on public.fact_observations (entity_type, entity_id, attribute);
 
@@ -283,14 +298,6 @@ alter table public.facts
     or (status = 'unknown' and truth_status = 'unknown')
     or (status = 'known' and truth_status in ('official','estimated')));
 
--- Web research sources (src/discovery/registry.ts WEB_RESEARCH_SOURCE_IDS; KEEP IN SYNC, a unit
--- test compares them). Their registry type is `developer`, but a web-search result is not an
--- official figure (H1).
-create or replace function public.tn_is_web_research_source(p_id text) returns boolean
-language sql immutable as $$
-  select p_id in ('anthropic-web-search','sample-web-research')
-$$;
-grant execute on function public.tn_is_web_research_source(text) to service_role;
 
 -- A source whose facts count as official (constitution §2): regulator / government / developer,
 -- not web research, not rejected in the registry.
@@ -348,7 +355,8 @@ where f.truth_status is null;
 
 -- Guard: a curated fact row is a historical record. Its identity, value and status never change
 -- (a new value is a new row via research_set_fact, which marks the old one is_current = false).
--- is_current, verification (via the audited RPCs), last_verified_at and ttl_hours may change.
+-- is_current, last_verified_at and ttl_hours may change. verification may change only inside the
+-- audited RPCs (research_set_verification / research_set_fact set tn.via_rpc for that one UPDATE).
 -- truth_status may only go from null to the derived value (tn_curated_truth_status); any other
 -- change is refused (H2), so a fact cannot be relabelled official by hand.
 -- Direct DELETE is refused for every role; a cascade from deleting its project or unit (RI
@@ -370,6 +378,11 @@ begin
     raise exception 'facts value, field, status and created_at cannot be updated (insert a new current row instead)'
       using errcode = 'insufficient_privilege';
   end if;
+  if new.verification is distinct from old.verification
+     and current_setting('tn.via_rpc', true) is distinct from 'on' then
+    raise exception 'facts.verification changes only through research_set_verification (audited)'
+      using errcode = 'insufficient_privilege';
+  end if;
   if new.truth_status is distinct from old.truth_status
      and not (old.truth_status is null
               and new.truth_status is not distinct from public.tn_curated_truth_status(new.id, new.status)) then
@@ -381,6 +394,91 @@ end $$;
 
 create trigger facts_guard before update or delete on public.facts
   for each row execute function public.tn_facts_guard();
+
+-- The D12/D13 RPCs, redefined from 0003 with bodies otherwise identical: each sets the
+-- transaction-local flag tn.via_rpc around its own UPDATE of facts and clears it right after.
+-- NOTE: the flag is a guard against accidental direct writes by server code, not a security
+-- boundary: any role that can run SQL can set a custom setting.
+create or replace function public.research_set_fact(
+  p_project_id text,
+  p_field text,            -- facts.field (snake_case)
+  p_status text,
+  p_value jsonb,
+  p_verification text,
+  p_sources jsonb,         -- [{sourceId, url, observedAt, documentDate?, note?}]
+  p_actor_id text,
+  p_actor_role text
+) returns jsonb
+language plpgsql security invoker set search_path = public, pg_temp as $$
+declare
+  v_fact_id text := gen_random_uuid()::text;
+  v_from text;
+  v_auto boolean;
+begin
+  if p_field not in ('address','rera_numbers','construction_status','declared_possession') then
+    raise exception 'unsupported research field %', p_field using errcode = 'check_violation';
+  end if;
+  perform 1 from public.projects where id = p_project_id for update;
+  if not found then
+    return jsonb_build_object('status', 'not_found');
+  end if;
+  select verification into v_from from public.facts
+    where project_id = p_project_id and field = p_field and unit_id is null and is_current for update;
+  perform set_config('tn.via_rpc', 'on', true);
+  update public.facts set is_current = false
+    where project_id = p_project_id and field = p_field and unit_id is null and is_current;
+  perform set_config('tn.via_rpc', 'off', true);
+  insert into public.facts (id, project_id, field, value, status, verification)
+    values (v_fact_id, p_project_id, p_field, p_value, p_status, p_verification);
+  insert into public.fact_sources (fact_id, source_id, url, observed_at, document_date, note)
+    select v_fact_id, s->>'sourceId', s->>'url', (s->>'observedAt')::timestamptz,
+           nullif(s->>'documentDate', '')::date, nullif(s->>'note', '')
+    from jsonb_array_elements(coalesce(p_sources, '[]'::jsonb)) s;
+  -- R2: completeness from the committed state, under the lock
+  update public.projects
+    set completeness = public.tn_compute_completeness(p_project_id), last_checked_at = now()
+    where id = p_project_id;
+  insert into public.fact_review_events (project_id, field, action, from_verification, to_verification, actor_id, actor_role)
+    values (p_project_id, public.tn_research_field_label(p_field), 'fact_set', coalesce(v_from, 'unverified'), p_verification,
+            p_actor_id, p_actor_role);
+  v_auto := public.tn_auto_unpublish_if_not_ready(p_project_id, p_actor_id, p_actor_role);
+  return jsonb_build_object('status', 'ok', 'fact_id', v_fact_id, 'auto_unpublished', v_auto);
+end $$;
+
+create or replace function public.research_set_verification(
+  p_project_id text, p_field text, p_fact_id text, p_expected_from text, p_to text,
+  p_actor_id text, p_actor_role text, p_note text
+) returns jsonb
+language plpgsql security invoker set search_path = public, pg_temp as $$
+declare
+  v_from text;
+  v_auto boolean;
+begin
+  perform 1 from public.projects where id = p_project_id for update;
+  if not found then
+    return jsonb_build_object('status', 'not_found');
+  end if;
+  select verification into v_from from public.facts
+    where id = p_fact_id and project_id = p_project_id and field = p_field and unit_id is null and is_current
+    for update;
+  if not found or v_from is distinct from p_expected_from then
+    return jsonb_build_object('status', 'conflict');
+  end if;
+  perform set_config('tn.via_rpc', 'on', true);
+  update public.facts set verification = p_to where id = p_fact_id;
+  perform set_config('tn.via_rpc', 'off', true);
+  insert into public.fact_review_events (project_id, field, action, from_verification, to_verification, actor_id, actor_role, note)
+    values (p_project_id, public.tn_research_field_label(p_field), 'verification_changed', v_from, p_to,
+            p_actor_id, p_actor_role, p_note);
+  v_auto := public.tn_auto_unpublish_if_not_ready(p_project_id, p_actor_id, p_actor_role);
+  return jsonb_build_object('status', 'ok', 'from', v_from, 'auto_unpublished', v_auto);
+end $$;
+
+-- create or replace keeps the existing ACL; restated for clarity (service role only).
+revoke all on function public.research_set_fact(text, text, text, jsonb, text, jsonb, text, text) from public, anon, authenticated;
+revoke all on function public.research_set_verification(text, text, text, text, text, text, text, text) from public, anon, authenticated;
+grant execute on function public.research_set_fact(text, text, text, jsonb, text, jsonb, text, text) to service_role;
+grant execute on function public.research_set_verification(text, text, text, text, text, text, text, text) to service_role;
 
 -- ---------------------------------------------------------------------------
 -- facts_current: one row per (entity, attribute), from live observations plus current curated
@@ -431,7 +529,9 @@ with candidates as (
   from public.facts f
   join public.fact_attributes a on a.entity_type = 'project' and a.legacy_field = f.field
   join public.projects p on p.id = f.project_id
-  cross join lateral (select coalesce(f.truth_status, public.tn_curated_truth_status(f.id, f.status)) as truth) tr
+  -- truth is derived at read time from the current sources; the stored truth_status is only a
+  -- fallback (it can go stale when sources are added or the registry changes)
+  cross join lateral (select coalesce(public.tn_curated_truth_status(f.id, f.status), f.truth_status) as truth) tr
   -- L2: an ISO date stored as text in a date attribute is compared (and served) as a date
   cross join lateral (select case when a.value_kind = 'date' and jsonb_typeof(f.value) = 'string'
                                   then public.tn_try_date(f.value #>> '{}') end as d) dt
@@ -514,7 +614,7 @@ select
   null::date,
   case when jsonb_typeof(f.value) not in ('string','number') then f.value end,
   a.unit,
-  coalesce(f.truth_status, public.tn_curated_truth_status(f.id, f.status)), f.verification, null::numeric, null::jsonb,
+  coalesce(public.tn_curated_truth_status(f.id, f.status), f.truth_status), f.verification, null::numeric, null::jsonb,
   ls.source_id, ls.url, public.tn_spec_source_type(ls.source_id, ls.type), coalesce(ls.observed_at, f.created_at),
   coalesce(f.last_verified_at, ls.observed_at, f.created_at), coalesce(f.ttl_hours, a.default_ttl_hours),
   null::text, 'staff'::text, p.is_sample, f.created_at, 'SUPERSEDED'::text,

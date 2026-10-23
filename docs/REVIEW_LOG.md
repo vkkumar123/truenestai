@@ -90,3 +90,21 @@ Low, open/accepted:
 - L-d: fixed — RESEARCH_WORKER.md no longer overstates no-JS support (Suspense streaming limitation predates M2.5).
 - L-e: real API search-result block shape untested; fails closed (`no_evidence`). Staging smoke call required before enabling the scheduler.
 - Deploy check: 0005 edited in place; confirmed not on origin/main and not applied by any database before merge.
+
+## S1a fact store — review round 1 (2026-10-23)
+Input: 6221878 (feat/02-fact-store); check 401, test:db 76. No live or remote database touched.
+Verdict: **CHANGES REQUIRED** (0 critical, 4 high, 5 medium, 4 low).
+- H1: the curated backfill counted web-search sources (registry type `developer`) as official.
+- H2: `facts.truth_status` could be changed freely, so a fact could be relabelled official by hand.
+- H3: staff-added observations could be inserted as verified with no actor or audit event.
+- H4: Supabase's default ALL privileges for `service_role` were not revoked on the new tables and views.
+- M1 truncate of facts/fact_sources; M2 sourceless curated values and basis-less estimates; M3 representative source; M4 official needs an official source type; M5 verified unknown curated rows overrode observations.
+- L1 is_sample integrity + production refusal; L2 date comparison; L3 rejected sources; L4 approved-source check (S2a).
+
+## S1a fact store — review round 2 (2026-10-23)
+Input: d53368f; check 405, test:db 81.
+Verdict: **PASS**. All round-1 findings verified fixed. Follow-ups closed in the next commit (0006 not yet applied anywhere):
+- estimate_basis CHECK requires a non-empty `sources` array; `listCurrent`/`getCurrent` skip a malformed row and log only its id.
+- Curated truth is derived at read time in `facts_current` and `facts_history` (stored value is a fallback only; H2 guard unchanged).
+- CHECK: a web research source always writes `source_type = 'search'`.
+- `facts.verification` changes only inside `research_set_verification` / `research_set_fact` (`tn.via_rpc` flag, redefined in 0006 with otherwise identical bodies); a direct UPDATE is refused. The flag is a guard against accidental writes, not a security boundary.

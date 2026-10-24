@@ -136,7 +136,7 @@ export class SupabaseDevelopmentRepository implements DevelopmentRepository {
   ) {}
 
   async listPublished(): Promise<Development[]> {
-    const { data, error } = await this.anon.from("infrastructure_items").select(PUBLIC_COLUMNS).eq("published", true).order("name").limit(500);
+    const { data, error } = await this.anon.from("infrastructure_items").select(PUBLIC_COLUMNS).eq("published", true).not("source_url", "is", null).order("name").limit(500);
     if (error) throw fail("listPublished", error);
     return ((data ?? []) as unknown as Row[]).map(mapDevelopmentRow);
   }

@@ -7,6 +7,7 @@ import {
   developmentNameKey,
   developmentQueryKey,
   isDevelopmentQueryKey,
+  mayStoreDevelopments,
   nearbyLocalityNames,
   researchLocalityDevelopments,
   sampleDevelopmentNames,
@@ -114,6 +115,38 @@ describe("development validator (anti-fabrication)", () => {
     expect(r.accepted[0].expectedCompletion).toBeNull();
     expect(r.fieldsDropped).toEqual({ expectedCompletion: 1 });
   });
+
+  it("drops a stage the page negates or puts in the future, even when the phrase itself is plain", () => {
+    for (const lead of ["has not been", "is yet to be", "is expected to be", "will be"]) {
+      const cited = `SAMPLE Alpha Metro Line serving ${LOC.name} ${lead} approved by the SAMPLE Metro Authority. Fictional.`;
+      const r = validate([{ ...good, stageText: "approved", expectedCompletion: null }], evidence([{ url: URL_A, citedText: cited }]));
+      expect(r.dropped, lead).toEqual({ stage_not_cited: 1 });
+    }
+    const cited = `SAMPLE Alpha Metro Line serving ${LOC.name} has not been approved. Fictional.`;
+    expect(validate([{ ...good, stageText: "has not been approved", expectedCompletion: null, authority: null }], evidence([{ url: URL_A, citedText: cited }])).dropped).toEqual({
+      stage_not_cited: 1,
+    });
+  });
+
+  it("requires the locality in the development's own citation window, not elsewhere on the page", () => {
+    const nameOnly = "SAMPLE Alpha Metro Line is under construction by the SAMPLE Metro Authority. Fictional.";
+    const localityElsewhere = `${LOC.name} has many SAMPLE parks. Fictional.`;
+    const r = validate([{ ...good, expectedCompletion: null }], evidence([{ url: URL_A, citedText: nameOnly }, { url: URL_A, citedText: localityElsewhere }]));
+    expect(r.dropped).toEqual({ locality_not_cited: 1 });
+  });
+
+  it("an expected year must not be an amount or distance, nor cut out of a financial year", () => {
+    const withText = (date: string, page: string) =>
+      validate([{ ...good, expectedCompletion: date }], evidence([{ url: URL_A, citedText: CITED_A.replace("December 2029", page) }]));
+    expect(withText("2030", "Rs 2030 crore").accepted[0].expectedCompletion).toBeNull();
+    expect(withText("2030 crore", "2030 crore").accepted[0].expectedCompletion).toBeNull();
+    expect(withText("₹2030", "₹2030").accepted[0].expectedCompletion).toBeNull();
+    expect(withText("2030", "2030 km").accepted[0].expectedCompletion).toBeNull();
+    expect(withText("2027", "2027-28").accepted[0].expectedCompletion).toBeNull();
+    expect(withText("2027-28", "2027-28").accepted[0].expectedCompletion).toBe("2027-28");
+    expect(withText("2030", "2030").accepted[0].expectedCompletion).toBe("2030");
+    expect(withText("2038", "2038").dropped).toEqual({ out_of_horizon: 1 });
+  });
 });
 
 describe("development research keys and prompt", () => {
@@ -172,5 +205,15 @@ describe("researchLocalityDevelopments with the fake client (network-free)", () 
     await expect(researchLocalityDevelopments("hebbal", { client: new FakeResearchClient(), source, env: "production", now: NOW })).rejects.toMatchObject({
       code: "source_not_runnable",
     });
+  });
+
+  it("policy gate: a source whose registry entry does not permit development_fields is refused", async () => {
+    expect(mayStoreDevelopments(source)).toBe(true);
+    expect(mayStoreDevelopments(getSource("anthropic-web-search")!)).toBe(true);
+    expect(mayStoreDevelopments(getSource("sample-feed")!)).toBe(false);
+    const client = new FakeResearchClient();
+    const noPermission = { ...source, storagePermissions: source.storagePermissions.filter((p) => p !== "development_fields") };
+    await expect(researchLocalityDevelopments("hebbal", { client, source: noPermission, env: "test", now: NOW })).rejects.toMatchObject({ code: "source_not_runnable" });
+    expect(client.developmentCalls).toHaveLength(0);
   });
 });

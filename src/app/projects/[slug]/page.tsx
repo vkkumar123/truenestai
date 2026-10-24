@@ -133,7 +133,7 @@ export default async function ProjectPage({ params }: PageProps<"/projects/[slug
           Around {locality}
         </h2>
         <div className="rounded-lg border border-border bg-surface px-4 py-4">
-          <PlannedDevelopments items={planned} localityName={locality} headingLevel={3} />
+          <PlannedDevelopments items={planned} localityName={locality} originPrecision={project.location.precision} headingLevel={3} />
         </div>
       </section>
 

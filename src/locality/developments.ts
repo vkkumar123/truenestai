@@ -102,12 +102,34 @@ const STAGE_PHRASES: readonly [RegExp, InfrastructureStage][] = [
   [/\b(proposed|planned|announced|on the anvil|in the pipeline|mooted|envisaged|feasibility)\b/, "proposed"],
 ];
 
-/** The tier a stage phrase states, or null when it states none. */
+/** Negation: "has not been approved", "no tender", "yet to be approved", "awaiting approval". */
+const NEGATION = /\b(not|no|never|nor|yet to|awaiting|pending|without)\b|n't\b/;
+/** Future or expectation: "expected to be operational", "will be opened", "likely to be tendered". */
+const FUTURE = /\b(expected to|likely to|set to|due to|will|shall|would|to be|soon|upcoming|plans? to|scheduled to)\b/;
+
+/** Negation and future markers in a stage phrase (or in the words just before it on the page). */
+export function stageMarkers(text: string): { negated: boolean; future: boolean } {
+  const t = text.normalize("NFKC").toLowerCase().replace(/[’`]/g, "'").replace(/\s+/g, " ");
+  return { negated: NEGATION.test(t), future: FUTURE.test(t) };
+}
+
+/** True when markers make a phrase unusable as evidence of `stage`. Future intent is what "proposed" means. */
+export function markersVoidStage(m: { negated: boolean; future: boolean }, stage: InfrastructureStage): boolean {
+  return m.negated || (m.future && stage !== "proposed");
+}
+
+/**
+ * The tier a stage phrase states, or null when it states none. A negated phrase ("has not been
+ * approved", "DPR yet to be approved") states no tier, and neither does a future one ("expected
+ * to be operational by 2027", "will be opened"), except "proposed", which is future intent.
+ */
 export function stageFromText(text: string | null | undefined): InfrastructureStage | null {
   if (!text) return null;
   const t = text.normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
   if (!t) return null;
-  for (const [re, stage] of STAGE_PHRASES) if (re.test(t)) return stage;
+  for (const [re, stage] of STAGE_PHRASES) {
+    if (re.test(t)) return markersVoidStage(stageMarkers(t), stage) ? null : stage;
+  }
   return null;
 }
 
@@ -162,11 +184,14 @@ export function parseDeclaredDate(text: string | null | undefined): DeclaredDate
   return null;
 }
 
+/** Research horizon in years ahead of now (owner requirement: next 5–10 years). */
+export const DEVELOPMENT_HORIZON_YEARS = 10;
+
 /**
  * True when a declared date falls in the research horizon: from last year to `horizonYears`
  * ahead of `now`. Used to keep researched rows to plans for the next 5–10 years.
  */
-export function withinHorizon(text: string | null | undefined, now: Date, horizonYears = 15): boolean {
+export function withinHorizon(text: string | null | undefined, now: Date, horizonYears = DEVELOPMENT_HORIZON_YEARS): boolean {
   const d = parseDeclaredDate(text);
   if (!d) return false;
   const y = now.getUTCFullYear();
@@ -271,7 +296,8 @@ export const DEVELOPMENT_RESEARCH_RADIUS_KM = 5;
 /** "2.3 km straight-line" (1 decimal, spec 08) or "450 m straight-line" below 1 km. */
 export function formatStraightLine(meters: number): string {
   if (!Number.isFinite(meters) || meters < 0) return "Distance not available";
-  if (meters < 1000) return `${Math.max(10, Math.round(meters / 10) * 10)} m straight-line`;
+  // From 950 m, metres would round to "1000 m", so switch to km ("1.0 km").
+  if (meters < 950) return `${Math.max(10, Math.round(meters / 10) * 10)} m straight-line`;
   return `${(Math.round(meters / 100) / 10).toFixed(1)} km straight-line`;
 }
 

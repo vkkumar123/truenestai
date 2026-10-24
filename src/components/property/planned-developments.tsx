@@ -1,5 +1,5 @@
 import { CalendarClock, Info, MapPin } from "lucide-react";
-import type { Development } from "@/domain/types";
+import type { Development, GeoPoint } from "@/domain/types";
 import { getLocality } from "@/config/markets";
 import {
   INFRA_CATEGORY_LABEL,
@@ -34,15 +34,26 @@ const STAGE_TONE = {
  * "Planned around here (next 5–10 years)". Published developments only (the service filters).
  * items === null → the list could not be loaded (error state). [] → honest "Not yet researched".
  */
+/** What a straight-line distance is measured from, worded honestly for the project's location precision. */
+export function distanceOrigin(precision: GeoPoint["precision"], localityName: string): string {
+  if (precision === "exact") return "from this project";
+  if (precision === "locality_centroid") return `from the ${localityName} locality centre (the project's exact location is not yet mapped)`;
+  return "from this project's approximate location";
+}
+
 export function PlannedDevelopments({
   items,
   localityName,
+  originPrecision,
   headingLevel = 2,
 }: {
   items: NearbyDevelopment[] | null;
   localityName: string;
+  /** Precision of the point distances are measured from (the project's location). */
+  originPrecision: GeoPoint["precision"];
   headingLevel?: 2 | 3;
 }) {
+  const origin = distanceOrigin(originPrecision, localityName);
   const H = headingLevel === 2 ? "h2" : "h3";
   return (
     <section aria-labelledby="planned-heading" className="space-y-3">
@@ -69,7 +80,7 @@ export function PlannedDevelopments({
       ) : (
         <ul className="space-y-3" aria-label={`Planned developments around ${localityName}`}>
           {items.map((n) => (
-            <DevelopmentCard key={n.development.id} item={n} />
+            <DevelopmentCard key={n.development.id} item={n} origin={origin} />
           ))}
         </ul>
       )}
@@ -77,7 +88,7 @@ export function PlannedDevelopments({
   );
 }
 
-function DevelopmentCard({ item }: { item: NearbyDevelopment<Development> }) {
+function DevelopmentCard({ item, origin }: { item: NearbyDevelopment<Development>; origin: string }) {
   const d = item.development;
   const slips = summarizeSlips(d.completionHistory);
   const history = sortRevisions(d.completionHistory);
@@ -122,8 +133,8 @@ function DevelopmentCard({ item }: { item: NearbyDevelopment<Development> }) {
           <MapPin aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
           {item.distanceMeters !== null ? (
             <span>
-              {formatStraightLine(item.distanceMeters)} from this project
-              {d.location?.precision !== "exact" ? <span className="text-muted-foreground"> (approximate location)</span> : null}
+              {formatStraightLine(item.distanceMeters)} {origin}
+              {d.location?.precision !== "exact" ? <span className="text-muted-foreground"> (development location approximate)</span> : null}
             </span>
           ) : (
             <span className="text-muted-foreground">Location not yet mapped (listed for {localities || "this area"})</span>

@@ -27,6 +27,8 @@ type Row = Omit<StaffDevelopment, "reviewStatus">;
 export class FixtureDevelopmentRepository implements DevelopmentRepository {
   private readonly rows = new Map<string, Row>();
   private readonly rejected = new Set<string>();
+  /** Rows a staff member edited (staff_edited_at in SQL): research never overwrites them. */
+  private readonly staffEdited = new Set<string>();
   private readonly audit: DevelopmentAuditEntry[] = [];
   /** Append-only, like infrastructure_completion_history. */
   private readonly history: (DeclaredCompletionRevision & { developmentId: string })[] = [];
@@ -55,7 +57,7 @@ export class FixtureDevelopmentRepository implements DevelopmentRepository {
   }
 
   async listPublished(): Promise<Development[]> {
-    return [...this.rows.values()].filter((r) => r.published).map((r) => publicView(this.view(r)));
+    return [...this.rows.values()].filter((r) => r.published && r.sourceUrl !== null).map((r) => publicView(this.view(r)));
   }
 
   async listForStaff(filter: { localityId?: string; limit?: number }): Promise<StaffDevelopment[]> {
@@ -113,11 +115,15 @@ export class FixtureDevelopmentRepository implements DevelopmentRepository {
         continue;
       }
       const r = existing;
-      const pending = !r.published && !this.rejected.has(r.id);
-      r.lastCheckedAt = input.observedAt;
+      // Same rules as development_store_research: a pending draft takes the new values; a reviewed
+      // row (published, rejected or edited by staff) keeps its values, gets pending_change on a
+      // contradiction, and its last-checked date is refreshed only when research matches it.
+      const pending = !r.published && !this.rejected.has(r.id) && !this.staffEdited.has(r.id);
       r.researchJobId = input.jobId;
+      let note: string;
       if (pending) {
         const prevDate = r.expectedCompletion;
+        r.lastCheckedAt = input.observedAt;
         r.category = it.category;
         r.stage = it.stage;
         r.authority = it.authority;
@@ -126,12 +132,23 @@ export class FixtureDevelopmentRepository implements DevelopmentRepository {
         r.verification = "unverified";
         r.pendingChange = null;
         if (r.expectedCompletion && r.expectedCompletion !== prevDate) this.appendHistory(r);
-      } else if (it.stage !== r.stage || it.authority !== r.authority || (it.expectedCompletion && it.expectedCompletion !== r.expectedCompletion)) {
+        note = "seen again by web research (pending draft updated)";
+      } else if (
+        it.stage !== r.stage ||
+        (it.authority !== null && it.authority !== r.authority) ||
+        (it.expectedCompletion !== null && it.expectedCompletion !== r.expectedCompletion)
+      ) {
         r.pendingChange = { stage: it.stage, authority: it.authority, expectedCompletion: it.expectedCompletion, observedAt: input.observedAt };
+        note = `research differs from the reviewed values (not applied): ${JSON.stringify(r.pendingChange)}`.slice(0, 1000);
+      } else if (r.pendingChange === null) {
+        r.lastCheckedAt = input.observedAt;
+        note = "seen again by web research (matches the reviewed values)";
+      } else {
+        note = "seen again by web research (an earlier pending change is still open)";
       }
       r.version += 1;
       r.updatedAt = this.now();
-      this.record({ developmentId: r.id, action: "researched", fromVerification: null, toVerification: null, actorId: "system:research", actorRole: "system", note: "seen again by web research" });
+      this.record({ developmentId: r.id, action: "researched", fromVerification: null, toVerification: null, actorId: "system:research", actorRole: "system", note });
       ids.push(r.id);
     }
     return ids;
@@ -181,9 +198,18 @@ export class FixtureDevelopmentRepository implements DevelopmentRepository {
     if (before === after && r.pendingChange === null) return { ok: true, development: this.view(r), changed: false, autoUnpublished: false };
     const fromVerification = r.verification;
     const prevDate = r.expectedCompletion;
+    const cleared = r.pendingChange;
     Object.assign(r, next, { lastCheckedAt: this.now(), verification: "unverified", version: r.version + 1, updatedAt: this.now() });
+    this.staffEdited.add(id);
     if (r.expectedCompletion && r.expectedCompletion !== prevDate) this.appendHistory(r);
-    this.record({ developmentId: id, action: "edited", fromVerification, toVerification: r.verification, ...actor, note: null });
+    this.record({
+      developmentId: id,
+      action: "edited",
+      fromVerification,
+      toVerification: r.verification,
+      ...actor,
+      note: cleared ? `cleared pending research change: ${JSON.stringify(cleared)}`.slice(0, 1000) : null,
+    });
     let autoUnpublished = false;
     if (r.published && developmentPublishBlockers(r).length) {
       r.published = false;
@@ -212,6 +238,7 @@ export class FixtureDevelopmentRepository implements DevelopmentRepository {
       (action === "restore" && !isRejected);
     if (unchanged) return { ok: true, development: this.view(r), changed: false, autoUnpublished: false };
     const from = r.verification;
+    const clearedChange = action === "publish" ? r.pendingChange : null;
     if (action === "publish") {
       const blockers = developmentPublishBlockers(r);
       if (blockers.length) return { ok: false, error: "not_ready", message: "Not ready to publish.", blockers };
@@ -233,7 +260,8 @@ export class FixtureDevelopmentRepository implements DevelopmentRepository {
     r.version += 1;
     r.updatedAt = this.now();
     const label = ({ publish: "published", unpublish: "unpublished", reject: "rejected", restore: "restored" } as const)[action];
-    this.record({ developmentId: id, action: label, fromVerification: from, toVerification: r.verification, ...actor, note: note?.trim().slice(0, 1000) || null });
+    const parts = [note?.trim() || null, clearedChange ? `cleared pending research change: ${JSON.stringify(clearedChange)}` : null].filter(Boolean);
+    this.record({ developmentId: id, action: label, fromVerification: from, toVerification: r.verification, ...actor, note: parts.join(" · ").slice(0, 1000) || null });
     return { ok: true, development: this.view(r), changed: true, autoUnpublished: false };
   }
 

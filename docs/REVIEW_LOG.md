@@ -124,3 +124,35 @@ Low, open/accepted:
 Input: 98ff691 (basic web_search_20250305, prompt tweak, refined no_candidates_* codes); check 411, research e2e 15.
 Verdict: **PASS**. Validator untouched; prompt still forbids guessing; counts-only logs; codes fit the CHECK.
 - L1: fixed — docs/comment now call dynamic filtering the suspected (not confirmed) cause.
+
+## S4a area developments — review round 1 (2026-10-24)
+Input: fd95768 (feat/06-area-developments); check 473, test:db 93, build, e2e 52.
+Verdict: **CHANGES REQUIRED** (3 high, 4 medium, 4 low, 3 nits).
+- H1: `stageFromText` mapped negated or future phrases to a real stage ("has not been approved" → approved, "expected to be operational by 2027" → operational).
+- H2: re-research refreshed `last_checked_at` even when it contradicted a published row; publish cleared `pending_change` without a record.
+- H3: no policy gate. `anthropic-web-search` storage permissions did not cover development fields, and nothing checked them.
+- M1: the locality could come from any citation of the URL, not the development's own.
+- M2: re-research overwrote an advisor's edits to a pending draft.
+- M3: the guard allowed inserting an S4a row published, and publishing outside the review RPC.
+- M4: distances said "from this project" when the project location is only a locality centroid.
+- L1: expected-year checks (amounts, distances, truncated financial years; horizon 15 → 10 years).
+- L2: the public read did not require `source_url`.
+- L3: the service role could delete or truncate `infrastructure_items`.
+- L4: a pre-S4a worker could claim an `area_developments` job.
+- Nits: 995 m showed as "1000 m"; §11.2/§11.3 order; unpublish did not revalidate public pages.
+
+## S4a area developments — review round 2 (2026-10-24) — pending re-review
+Input: the commit after fd95768 on feat/06-area-developments; check 493, test:db 98, build, area-developments e2e.
+Verdict: **pending re-review**. Changes for each round-1 finding:
+- H1: negation/future markers void a stage, both in the phrase and in the four cited words before it (future intent still counts as `proposed`). Tests cover the reviewer's examples.
+- H2: `development_store_research` rewritten as explicit branches. On a contradiction it sets `pending_change` and writes it into the audit note, and does not refresh `last_checked_at`. A match refreshes it. Publish and staff edits record the pending change they cleared. Covered by a DB test (publish "proposed 2028", research "shelved 2031") and a fixture mirror test.
+- H3: registry field `development_fields`, granted to `sample-web-research` and to `anthropic-web-search` on Fury's 2026-10-24 request (D20). Required at enqueue, in the worker job and in `researchLocalityDevelopments`. Refusal tested.
+- M1: the locality must be in the name's citation windows. Tested.
+- M2: `staff_edited_at` (set by `development_update`). A staff-edited draft is treated as reviewed. Mirrored in the fixture. DB and unit tests.
+- M3: the guard rejects S4a inserts with `published = true` and any unpublished-to-published change outside `tn.via_rpc`. DB tests.
+- M4: `PlannedDevelopments` takes the project's location precision and says "from the {locality} locality centre" or "approximate location". e2e asserts it.
+- L1: `declaredDateOk` rejects amounts and distances and truncated financial years; the horizon is now 10 years. Tests.
+- L2: `listPublished` (Supabase and fixture) requires `source_url`.
+- L3: DELETE and TRUNCATE revoked from service_role. DB test.
+- L4: `research_claim_jobs` filters by kind (the 2-argument form claims `search_miss` only). DB test, plus a deploy-order note in RESEARCH_WORKER.md.
+- Nits: km from 950 m; §11.3 placed after §11.2; review actions always revalidate public pages.

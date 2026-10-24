@@ -212,6 +212,70 @@ describe("staff review: publish, roles, readiness, audit", () => {
   });
 });
 
+describe("re-research vs reviewed rows (mirror of development_store_research)", () => {
+  const again = (ctx: Awaited<ReturnType<typeof researched>>, url: string, over: Record<string, unknown>, observedAt = "2026-11-01T00:00:00.000Z") =>
+    ctx.repos.developments.storeResearched({
+      jobId: "job-2",
+      researchLocalityId: "hebbal",
+      sourceId: "sample-web-research",
+      observedAt,
+      isSample: true,
+      items: [{ name: NAMES.metro, category: "metro", stage: "under_construction", authority: "SAMPLE Metro Authority", expectedCompletion: "December 2029", localityId: "hebbal", sourceUrl: url, ...over }],
+    });
+
+  it("an advisor-edited pending draft is not overwritten; the new values become a pending change", async () => {
+    const ctx = await researched();
+    const metro = (await staffItem(ctx, NAMES.metro)).development;
+    const edited = await svc.updateDevelopment(editForm(metro, { stage: "tendered" }), ctx.advisor);
+    expect(edited.ok).toBe(true);
+    await again(ctx, metro.sourceUrl!, { stage: "operational" });
+    const after = (await staffItem(ctx, NAMES.metro)).development;
+    expect(after).toMatchObject({ stage: "tendered", published: false, pendingChange: { stage: "operational" } });
+  });
+
+  it("a contradiction does not refresh the public last-checked date and is recorded; publishing records what it cleared", async () => {
+    const ctx = await researched();
+    const metro = (await staffItem(ctx, NAMES.metro)).development;
+    const pub = await svc.reviewDevelopment({ id: metro.id, version: String(metro.version), action: "publish" }, ctx.admin);
+    const before = pub.ok ? pub.development.lastCheckedAt : "";
+    await again(ctx, metro.sourceUrl!, { stage: "shelved", expectedCompletion: "2031" });
+    const [published] = await ctx.repos.developments.listPublished();
+    expect(published).toMatchObject({ stage: "under_construction", expectedCompletion: "December 2029", lastCheckedAt: before });
+    const item = await staffItem(ctx, NAMES.metro);
+    expect(item.audit.at(-1)?.note).toMatch(/differs from the reviewed values.*shelved/);
+
+    // research that matches refreshes it
+    const ctx2 = await researched();
+    const m2 = (await staffItem(ctx2, NAMES.metro)).development;
+    await svc.reviewDevelopment({ id: m2.id, version: String(m2.version), action: "publish" }, ctx2.admin);
+    await again(ctx2, m2.sourceUrl!, {}, "2026-11-05T00:00:00.000Z");
+    expect((await ctx2.repos.developments.listPublished())[0].lastCheckedAt).toBe("2026-11-05T00:00:00.000Z");
+
+    // unpublish → publish again clears the pending change, with a record of it
+    const cur = item.development;
+    const un = await svc.reviewDevelopment({ id: cur.id, version: String(cur.version), action: "unpublish" }, ctx.admin);
+    const v = un.ok ? un.development.version : 0;
+    await svc.reviewDevelopment({ id: cur.id, version: String(v), action: "publish" }, ctx.admin);
+    const last = (await staffItem(ctx, NAMES.metro)).audit.at(-1)!;
+    expect(last).toMatchObject({ action: "published" });
+    expect(last.note).toMatch(/cleared pending research change: .*shelved/);
+  });
+
+  it("a research source without the development_fields permission is refused at enqueue and in the worker", async () => {
+    const { repos, advisor } = setup();
+    const base = jobs.researchSourceFor(repos.backend);
+    const noPermission = { ...base, storagePermissions: base.storagePermissions.filter((p) => p !== "development_fields") };
+    expect(await svc.requestAreaDevelopmentResearch({ localityId: "hebbal" }, { ...advisor, source: noPermission })).toMatchObject({ ok: false, error: "unavailable" });
+    expect(await repos.researchJobs.listRecent(5)).toHaveLength(0);
+    await svc.requestAreaDevelopmentResearch({ localityId: "hebbal" }, advisor);
+    const [job] = await repos.researchJobs.listRecent(1);
+    await expect(
+      svc.runAreaDevelopmentJob(job, { repos, client: new FakeResearchClient(), source: noPermission, env: "test", now: NOW, signal: new AbortController().signal }),
+    ).rejects.toMatchObject({ code: "source_not_runnable" });
+    expect(await repos.developments.listForStaff({ localityId: "hebbal" })).toEqual([]);
+  });
+});
+
 describe("readiness rules stay in sync with SQL", () => {
   it("every blocker message is produced by tn_development_publish_blockers", () => {
     const sql = readFileSync(join(process.cwd(), "supabase/migrations/0008_developments.sql"), "utf8");

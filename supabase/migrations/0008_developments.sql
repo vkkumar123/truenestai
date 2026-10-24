@@ -95,6 +95,47 @@ end $$;
 revoke all on function public.research_enqueue(text, text, text, text, integer, integer, integer, text) from public, anon, authenticated;
 grant execute on function public.research_enqueue(text, text, text, text, integer, integer, integer, text) to service_role;
 
+-- Claim by kind. A worker built before S4a calls the 2-argument form, which now claims only
+-- search_miss jobs, so it can never run an area_developments job as a search. The S4a worker
+-- passes every kind it handles. Same body as 0005 plus the kind filter.
+create or replace function public.research_claim_jobs(p_limit integer, p_stale_minutes integer, p_kinds text[])
+returns setof jsonb
+language plpgsql security invoker set search_path = public, pg_temp as $$
+begin
+  update public.research_jobs
+     set status = 'failed', error_code = 'abandoned', finished_at = now()
+   where id in (
+     select id from public.research_jobs
+      where status = 'running' and attempts >= 2 and kind = any(p_kinds)
+        and started_at < now() - make_interval(mins => greatest(p_stale_minutes, 1))
+      for update skip locked);
+
+  return query
+  update public.research_jobs j
+     set status = 'running', started_at = now(), attempts = j.attempts + 1
+   where j.id in (
+     select id from public.research_jobs
+      where kind = any(p_kinds)
+        and (status = 'queued'
+             or (status = 'running' and attempts < 2
+                 and started_at < now() - make_interval(mins => greatest(p_stale_minutes, 1))))
+      order by requested_at
+      for update skip locked
+      limit greatest(0, least(p_limit, 20)))
+  returning to_jsonb(j) - 'requester_ip_hash';
+end $$;
+
+create or replace function public.research_claim_jobs(p_limit integer, p_stale_minutes integer)
+returns setof jsonb
+language sql security invoker set search_path = public, pg_temp as $$
+  select * from public.research_claim_jobs(p_limit, p_stale_minutes, array['search_miss'])
+$$;
+
+revoke all on function public.research_claim_jobs(integer, integer, text[]) from public, anon, authenticated;
+grant execute on function public.research_claim_jobs(integer, integer, text[]) to service_role;
+revoke all on function public.research_claim_jobs(integer, integer) from public, anon, authenticated;
+grant execute on function public.research_claim_jobs(integer, integer) to service_role;
+
 -- ---------------------------------------------------------------------------
 -- infrastructure_items: spec-06 columns
 -- ---------------------------------------------------------------------------
@@ -118,6 +159,7 @@ alter table public.infrastructure_items
   add column rejected_at timestamptz,
   add column rejection_note text,
   add column pending_change jsonb,                   -- research seen after review; staff decide
+  add column staff_edited_at timestamptz,            -- last staff content edit; research then never overwrites
   add column version integer not null default 1,
   add column created_at timestamptz not null default now(),
   add column updated_at timestamptz not null default now(),
@@ -217,6 +259,10 @@ begin
     if new.added_by is not null and new.verification <> 'unverified' then
       raise exception 'new developments are inserted unverified' using errcode = 'check_violation';
     end if;
+    -- an S4a row is published only by staff review (development_set_review), never at insert
+    if new.added_by is not null and new.published then
+      raise exception 'new developments are inserted unpublished' using errcode = 'check_violation';
+    end if;
     new.version := 1;
     new.created_at := now();
     new.updated_at := now();
@@ -229,6 +275,10 @@ begin
     end if;
     if new.verification is distinct from old.verification and current_setting('tn.via_rpc', true) is distinct from 'on' then
       raise exception 'infrastructure_items.verification changes only through the audited review RPCs'
+        using errcode = 'insufficient_privilege';
+    end if;
+    if new.published and not old.published and current_setting('tn.via_rpc', true) is distinct from 'on' then
+      raise exception 'infrastructure_items are published only through the audited review RPC'
         using errcode = 'insufficient_privilege';
     end if;
     -- completion_history is derived: a direct write to it is ignored; a changed declared date appends
@@ -302,8 +352,13 @@ end $$;
 -- concurrency on `version` (what the reviewer saw).
 -- ---------------------------------------------------------------------------
 
--- Research worker: upsert validated, cited items for one job. Pending rows take the new values;
--- published or rejected rows keep theirs and get pending_change when research saw something else.
+-- Research worker: upsert validated, cited items for one job.
+-- * New item: inserted unverified and unpublished.
+-- * Pending draft (not published, not rejected, never edited by staff): takes the new values.
+-- * Reviewed row (published, rejected, or edited by staff): keeps its values. When research
+--   contradicts them, the new values go to pending_change (also copied into the audit note) and
+--   last_checked_at is NOT refreshed, so buyers never see a fresh "last checked" on stale values.
+--   last_checked_at is refreshed only when research matches the stored values.
 create or replace function public.development_store_research(
   p_job_id uuid,
   p_research_locality_id text,
@@ -315,40 +370,62 @@ create or replace function public.development_store_research(
 language plpgsql security invoker set search_path = public, pg_temp as $$
 declare
   it jsonb;
+  r public.infrastructure_items;
   v_id text;
-  v_inserted boolean;
+  v_note text;
+  v_stage text;
+  v_authority text;
+  v_expected text;
+  v_change jsonb;
   v_ids text[] := '{}';
 begin
   perform set_config('tn.via_rpc', 'on', true);
   for it in select * from jsonb_array_elements(coalesce(p_items, '[]'::jsonb)) loop
-    insert into public.infrastructure_items as t (id, name, category, stage, authority, expected_completion, locality_ids,
-        source_id, source_url, source_observed_at, last_checked_at, added_by, research_job_id, research_locality_id,
-        is_sample, published)
-      values (gen_random_uuid()::text, it->>'name', it->>'category', it->>'stage', nullif(it->>'authority', ''),
-        nullif(it->>'expectedCompletion', ''), array[it->>'localityId'], p_source_id, it->>'sourceUrl', p_observed_at,
-        p_observed_at, 'research', p_job_id, p_research_locality_id, p_is_sample, false)
-    on conflict (name_key, source_url) where added_by = 'research' do update set
-      last_checked_at = excluded.last_checked_at,
-      research_job_id = excluded.research_job_id,
-      category = case when not t.published and t.rejected_at is null then excluded.category else t.category end,
-      stage = case when not t.published and t.rejected_at is null then excluded.stage else t.stage end,
-      authority = case when not t.published and t.rejected_at is null then excluded.authority else t.authority end,
-      expected_completion = case when not t.published and t.rejected_at is null
-        then coalesce(excluded.expected_completion, t.expected_completion) else t.expected_completion end,
-      source_observed_at = case when not t.published and t.rejected_at is null then excluded.source_observed_at else t.source_observed_at end,
-      verification = case when not t.published and t.rejected_at is null then 'unverified' else t.verification end,
-      pending_change = case
-        when not t.published and t.rejected_at is null then null
-        when excluded.stage is distinct from t.stage or excluded.authority is distinct from t.authority
-             or (excluded.expected_completion is not null and excluded.expected_completion is distinct from t.expected_completion)
-          then jsonb_build_object('stage', excluded.stage, 'authority', excluded.authority,
-                                  'expectedCompletion', excluded.expected_completion, 'observedAt', excluded.source_observed_at)
-        else t.pending_change end
-    returning t.id, (t.xmax = 0) into v_id, v_inserted;
+    v_stage := it->>'stage';
+    v_authority := nullif(it->>'authority', '');
+    v_expected := nullif(it->>'expectedCompletion', '');
+    select * into r from public.infrastructure_items
+      where added_by = 'research' and source_url = it->>'sourceUrl'
+        and name_key = btrim(lower(regexp_replace(it->>'name', '[^[:alnum:]]+', ' ', 'g')))
+      for update;
+    if not found then
+      insert into public.infrastructure_items (id, name, category, stage, authority, expected_completion, locality_ids,
+          source_id, source_url, source_observed_at, last_checked_at, added_by, research_job_id, research_locality_id,
+          is_sample, published)
+        values (gen_random_uuid()::text, it->>'name', it->>'category', v_stage, v_authority, v_expected,
+          array[it->>'localityId'], p_source_id, it->>'sourceUrl', p_observed_at, p_observed_at, 'research', p_job_id,
+          p_research_locality_id, p_is_sample, false)
+        returning id into v_id;
+      v_note := 'found by web research';
+    elsif not r.published and r.rejected_at is null and r.staff_edited_at is null then
+      update public.infrastructure_items set
+          last_checked_at = p_observed_at, research_job_id = p_job_id, category = it->>'category', stage = v_stage,
+          authority = v_authority, expected_completion = coalesce(v_expected, r.expected_completion),
+          source_observed_at = p_observed_at, verification = 'unverified', pending_change = null
+        where id = r.id;
+      v_id := r.id;
+      v_note := 'seen again by web research (pending draft updated)';
+    else
+      v_id := r.id;
+      -- research not finding a value (null) is not a contradiction; a different value is
+      if v_stage is distinct from r.stage
+         or (v_authority is not null and v_authority is distinct from r.authority)
+         or (v_expected is not null and v_expected is distinct from r.expected_completion) then
+        v_change := jsonb_build_object('stage', v_stage, 'authority', v_authority, 'expectedCompletion', v_expected,
+                                       'observedAt', p_observed_at);
+        update public.infrastructure_items set research_job_id = p_job_id, pending_change = v_change where id = r.id;
+        v_note := left('research differs from the reviewed values (not applied): ' || v_change::text, 1000);
+      elsif r.pending_change is null then
+        update public.infrastructure_items set research_job_id = p_job_id, last_checked_at = p_observed_at where id = r.id;
+        v_note := 'seen again by web research (matches the reviewed values)';
+      else
+        update public.infrastructure_items set research_job_id = p_job_id where id = r.id;
+        v_note := 'seen again by web research (an earlier pending change is still open)';
+      end if;
+    end if;
     v_ids := v_ids || v_id;
     insert into public.infrastructure_review_events (development_id, action, actor_id, actor_role, note)
-      values (v_id, 'researched', 'system:research', 'system',
-              case when v_inserted then 'found by web research' else 'seen again by web research' end);
+      values (v_id, 'researched', 'system:research', 'system', v_note);
   end loop;
   perform set_config('tn.via_rpc', 'off', true);
   return to_jsonb(v_ids);
@@ -416,15 +493,17 @@ begin
   returning * into n;
   -- Only a real content change counts as a check by staff and resets verification.
   if n.version <> r.version then
-    update public.infrastructure_items set last_checked_at = now(), verification = 'unverified'
+    update public.infrastructure_items set last_checked_at = now(), verification = 'unverified', staff_edited_at = now()
       where id = p_id returning * into n;
   end if;
   perform set_config('tn.via_rpc', 'off', true);
   if n.version = r.version then
     return jsonb_build_object('status', 'unchanged', 'version', n.version);
   end if;
-  insert into public.infrastructure_review_events (development_id, action, actor_id, actor_role, from_verification, to_verification)
-    values (p_id, 'edited', p_actor_id, p_actor_role, r.verification, n.verification);
+  insert into public.infrastructure_review_events (development_id, action, actor_id, actor_role, from_verification, to_verification, note)
+    values (p_id, 'edited', p_actor_id, p_actor_role, r.verification, n.verification,
+            case when r.pending_change is not null
+              then left('cleared pending research change: ' || r.pending_change::text, 1000) end);
   if r.published and not n.published then
     insert into public.infrastructure_review_events (development_id, action, actor_id, actor_role, note)
       values (p_id, 'unpublished', p_actor_id, p_actor_role, 'auto: failed readiness after edit');
@@ -488,7 +567,11 @@ begin
   insert into public.infrastructure_review_events (development_id, action, actor_id, actor_role, from_verification, to_verification, note)
     values (p_id, case p_action when 'publish' then 'published' when 'unpublish' then 'unpublished'
                                 when 'reject' then 'rejected' else 'restored' end,
-            p_actor_id, p_actor_role, r.verification, n.verification, nullif(left(p_note, 1000), ''));
+            p_actor_id, p_actor_role, r.verification, n.verification,
+            -- publishing clears a pending research change: keep a record of what was set aside
+            nullif(left(concat_ws(' · ', nullif(btrim(p_note), ''),
+              case when p_action = 'publish' and r.pending_change is not null
+                then 'cleared pending research change: ' || r.pending_change::text end), 1000), ''));
   return jsonb_build_object('status', 'ok', 'version', n.version);
 end $$;
 
@@ -525,6 +608,9 @@ grant select (id, name, category, stage, locality_ids, lat, lng, location_precis
   last_checked_at, is_sample, published, authority, announced_date, expected_completion, completion_history,
   confidence, source_id, source_url, source_observed_at, verification, added_by)
   on public.infrastructure_items to anon, authenticated;
+-- Supabase default privileges give service_role ALL: no DELETE/TRUNCATE (history and audit
+-- reference rows by id; a takedown will use an audited tombstone, C23).
+revoke delete, truncate on public.infrastructure_items from service_role;
 grant select, insert, update on public.infrastructure_items to service_role;
 
 alter table public.infrastructure_completion_history enable row level security;

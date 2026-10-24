@@ -59,6 +59,29 @@ describe("infrastructure stages", () => {
     expect(stageFromText("")).toBeNull();
     expect(stageFromText(null)).toBeNull();
   });
+
+  it.each([
+    "has not been approved",
+    "yet to be approved",
+    "DPR yet to be approved",
+    "not under construction",
+    "expected to be operational by 2027",
+    "will be opened",
+    "is likely to be tendered",
+    "awaiting approval",
+    "approval pending",
+    "no tender has been floated",
+    "hasn't been sanctioned",
+    "to be completed soon",
+  ])("a negated or future phrase states no tier: %j", (text) => {
+    expect(stageFromText(text)).toBeNull();
+  });
+
+  it("future intent still states 'proposed'; negation does not", () => {
+    expect(stageFromText("proposed to be built")).toBe("proposed");
+    expect(stageFromText("will be built as planned")).toBe("proposed");
+    expect(stageFromText("not proposed")).toBeNull();
+  });
 });
 
 describe("declared dates", () => {
@@ -83,10 +106,12 @@ describe("declared dates", () => {
     expect(parseDeclaredDate("June 2027")!.key).toBeLessThan(parseDeclaredDate("2027")!.key);
   });
 
-  it("keeps the research horizon to last year … +15 years", () => {
+  it("keeps the research horizon to last year … +10 years", () => {
     const now = new Date("2026-10-24T00:00:00Z");
     expect(withinHorizon("December 2027", now)).toBe(true);
     expect(withinHorizon("2025", now)).toBe(true);
+    expect(withinHorizon("2036", now)).toBe(true);
+    expect(withinHorizon("2037", now)).toBe(false);
     expect(withinHorizon("2019", now)).toBe(false);
     expect(withinHorizon("2045", now)).toBe(false);
     expect(withinHorizon("soon", now)).toBe(false);
@@ -129,6 +154,9 @@ describe("straight-line distance", () => {
     expect(formatStraightLine(2340)).toBe("2.3 km straight-line");
     expect(formatStraightLine(1000)).toBe("1.0 km straight-line");
     expect(formatStraightLine(454)).toBe("450 m straight-line");
+    expect(formatStraightLine(995)).toBe("1.0 km straight-line"); // never "1000 m"
+    expect(formatStraightLine(950)).toBe("1.0 km straight-line");
+    expect(formatStraightLine(940)).toBe("940 m straight-line");
     expect(formatStraightLine(2)).toBe("10 m straight-line");
     expect(formatStraightLine(NaN)).toBe("Distance not available");
   });

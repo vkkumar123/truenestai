@@ -90,7 +90,7 @@ export class SupabaseResearchJobRepository implements ResearchJobRepository {
   }
 
   async claim(limit: number, staleMinutes: number): Promise<ResearchJob[]> {
-    const { data, error } = await this.db().rpc("research_claim_jobs", { p_limit: limit, p_stale_minutes: staleMinutes });
+    const { data, error } = await this.db().rpc("research_claim_jobs", { p_limit: limit, p_stale_minutes: staleMinutes, p_kinds: ["search_miss", "area_developments"] });
     if (error) throw new Error(`research_claim_jobs failed: ${error.code ?? "unknown"}`);
     return ((data ?? []) as ResearchJobRow[]).map(mapJob);
   }

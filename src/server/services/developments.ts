@@ -9,6 +9,7 @@ import {
   MAX_DEVELOPMENT_NAME,
   ResearchClientError,
   developmentQueryKey,
+  mayStoreDevelopments,
   researchLocalityDevelopments,
   type DevelopmentResearchResult,
   type ResearchClient,
@@ -53,6 +54,8 @@ export interface DevelopmentDeps {
   requireStaff?: () => Promise<StaffSession>;
   env?: RuntimeEnv;
   processEnv?: NodeJS.ProcessEnv;
+  /** Research source override (tests); defaults to the backend's registry source. */
+  source?: SourceEntry;
 }
 
 const fail = (error: DevelopmentErrorCode, message: string, errors?: string[]): DevelopmentError =>
@@ -112,10 +115,14 @@ export async function requestAreaDevelopmentResearch(
   const id = z.string().trim().min(1).max(80).safeParse(input.localityId);
   if (!id.success || !isActiveLocality(id.data)) return fail("validation", "Choose an active locality from the market configuration.");
   const locality = getLocality(id.data)!;
-  const source = researchSourceFor(repos.backend);
+  const source = deps.source ?? researchSourceFor(repos.backend);
   const pe = deps.processEnv ?? process.env;
   if (!isRunnable(source, deps.env ?? currentEnv()) || !researchWorkerConfigured(repos.backend, pe)) {
     return fail("unavailable", "Web research is not available in this environment.");
+  }
+  if (!mayStoreDevelopments(source)) {
+    log.warn("developments.research_refused", { sourceId: source.id, reason: "no_development_fields_permission" });
+    return fail("unavailable", "The research source is not permitted to store development details.");
   }
   const result = await repos.researchJobs.enqueue({
     kind: "area_developments",
@@ -155,6 +162,7 @@ export async function runAreaDevelopmentJob(
   ctx: { repos: Repositories; client: ResearchClient; source: SourceEntry; env: RuntimeEnv; now: Date; signal: AbortSignal },
 ): Promise<DevelopmentJobOutcome> {
   if (!job.localityId) throw new ResearchClientError("bad_request", false);
+  if (!mayStoreDevelopments(ctx.source)) throw new ResearchClientError("source_not_runnable", false);
   const run = await researchLocalityDevelopments(job.localityId, {
     client: ctx.client,
     source: ctx.source,
@@ -219,7 +227,7 @@ export async function getStaffDevelopmentsView(localityId: string, deps: Develop
   const items = await Promise.all(
     rows.map(async (development) => ({ development, blockers: developmentPublishBlockers(development), audit: await repos.developments.listAudit(development.id) })),
   );
-  const source = researchSourceFor(repos.backend);
+  const source = deps.source ?? researchSourceFor(repos.backend);
   return {
     ok: true,
     view: {

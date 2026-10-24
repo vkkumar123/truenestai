@@ -141,7 +141,7 @@ d("developments (0008)", () => {
       expect(await review(roadId, rd.version, "publish")).toEqual({ status: "not_ready", blockers: ["authority: not yet found"] });
       const m = await row(metroId);
       expect(await review(metroId, m.version + 7, "publish")).toEqual({ status: "conflict" });
-      expect((await errorAs(c, "service_role", null, "update infrastructure_items set published = true where id = $1", [roadId]))?.code).toBe("23514");
+      expect((await errorAs(c, "service_role", null, "update infrastructure_items set published = true where id = $1", [roadId]))?.code).toBe("42501");
       const ok = await review(metroId, m.version, "publish", "source_confirmed");
       expect(ok.status).toBe("ok");
       expect(await review(metroId, ok.version, "publish", "source_confirmed")).toMatchObject({ status: "unchanged" });
@@ -226,6 +226,84 @@ d("developments (0008)", () => {
       expect(r.status).toBe("ok");
       expect(await row(r.id)).toMatchObject({ added_by: "staff", verification: "unverified", published: false });
       await expect(c.query("select development_create($1::jsonb, true, $2, 'admin')", [JSON.stringify({ ...f, authority: "" }), ADMIN_UID])).rejects.toThrow(/infra_staff_has_authority_url/);
+    });
+  });
+
+  describe("review round 1 fixes", () => {
+    const URL_P = "https://example.org/sample-developments/hebbal/peripheral";
+    const URL_E = "https://example.org/sample-developments/hebbal/edited";
+    const peripheral = { name: "SAMPLE Hebbal Peripheral Road", category: "ring_road", stage: "proposed", authority: "SAMPLE Roads Board", expectedCompletion: "2028", localityId: "hebbal", sourceUrl: URL_P };
+    const edited = { name: "SAMPLE Hebbal Edited Flyover", category: "flyover", stage: "approved", authority: "SAMPLE Roads Board", expectedCompletion: "2029", localityId: "hebbal", sourceUrl: URL_E };
+    const anonLastChecked = (id: string) =>
+      asRole(c, "anon", null, async (db) => (await db.query("select last_checked_at from infrastructure_items where id = $1", [id])).rows[0]?.last_checked_at as Date | undefined);
+    const lastEvent = async (id: string) =>
+      (await c.query("select action, note from infrastructure_review_events where development_id = $1 order by id desc limit 1", [id])).rows[0];
+
+    it("H2: research contradicting a published row is recorded, never refreshes its public last-checked date; publish records what it cleared", async () => {
+      const [id] = await store([peripheral], "2026-10-24T00:00:00Z");
+      const pub = await review(id, (await row(id)).version, "publish");
+      expect(pub.status).toBe("ok");
+      const shown = await anonLastChecked(id);
+      expect(shown?.toISOString()).toBe("2026-10-24T00:00:00.000Z");
+
+      await store([{ ...peripheral, stage: "shelved", expectedCompletion: "2031" }], "2026-12-01T00:00:00Z");
+      expect((await anonLastChecked(id))?.toISOString()).toBe("2026-10-24T00:00:00.000Z");
+      const r = await row(id);
+      expect(r).toMatchObject({ stage: "proposed", expected_completion: "2028", published: true, pending_change: { stage: "shelved", expectedCompletion: "2031" } });
+      const ev = await lastEvent(id);
+      expect(ev.action).toBe("researched");
+      expect(ev.note).toMatch(/differs from the reviewed values.*shelved.*2031/);
+
+      // unpublish, then publish again: the cleared pending change is kept in the audit note
+      const un = await review(id, r.version, "unpublish");
+      const again = await review(id, un.version, "publish", null, "checked the authority page");
+      expect(again.status).toBe("ok");
+      expect((await row(id)).pending_change).toBeNull();
+      expect((await lastEvent(id)).note).toMatch(/^checked the authority page · cleared pending research change: .*shelved/);
+
+      // research that matches the reviewed values refreshes the date
+      await store([peripheral], "2026-12-15T00:00:00Z");
+      expect((await anonLastChecked(id))?.toISOString()).toBe("2026-12-15T00:00:00.000Z");
+    });
+
+    it("M2: re-research never overwrites a pending draft that staff edited", async () => {
+      const [id] = await store([edited]);
+      const e = await row(id);
+      expect(e.staff_edited_at).toBeNull();
+      const u = await update(id, e.version, fieldsOf(e, { stage: "tendered" }));
+      expect(u.status).toBe("ok");
+      expect((await row(id)).staff_edited_at).not.toBeNull();
+      await store([{ ...edited, stage: "under_construction" }], "2026-12-03T00:00:00Z");
+      expect(await row(id)).toMatchObject({ stage: "tendered", published: false, pending_change: { stage: "under_construction" } });
+    });
+
+    it("M3: S4a rows cannot be inserted published or published outside the review RPC", async () => {
+      expect(
+        (await errorAs(c, "service_role", null,
+          `insert into infrastructure_items (id, name, category, stage, added_by, authority, source_url, source_observed_at, published)
+           values ('x-pub', 'SAMPLE X', 'metro', 'proposed', 'staff', 'SAMPLE A', '${URL_M}', now(), true)`))?.code,
+      ).toBe("23514");
+      const [id] = await store([{ ...edited, name: "SAMPLE Hebbal Direct Publish Try" }]);
+      expect((await errorAs(c, "service_role", null, "update infrastructure_items set published = true where id = $1", [id]))?.code).toBe("42501");
+      await expect(c.query("update infrastructure_items set published = true where id = $1", [id])).rejects.toThrow(/published only through the audited review RPC/);
+      expect((await row(id)).published).toBe(false);
+    });
+
+    it("L3: service_role cannot delete or truncate developments", async () => {
+      expect((await errorAs(c, "service_role", null, "delete from infrastructure_items where id = 'legacy-pub'"))?.code).toBe("42501");
+      expect((await errorAs(c, "service_role", null, "truncate infrastructure_items cascade"))?.code).toBe("42501");
+    });
+
+    it("L4: the pre-S4a claim signature never claims an area_developments job; the S4a one does", async () => {
+      await asRole(c, "service_role", null, async (db) => {
+        await db.query("select research_enqueue('Area developments: Hebbal', 'dev:hebbal', 'hebbal', null, 0, 50, 10, 'area_developments')");
+        await db.query("select research_enqueue('SAMPLE claim q', 'sample claim q', null, null, 0, 50, 10)");
+        const old = (await db.query("select r from research_claim_jobs(10, 15) r")).rows.map((x) => x.r.kind);
+        expect(old).toEqual(["search_miss"]);
+        const next = (await db.query("select r from research_claim_jobs(10, 15, array['search_miss','area_developments']) r")).rows.map((x) => x.r.kind);
+        expect(next).toEqual(["area_developments"]);
+      });
+      expect((await errorAs(c, "anon", null, "select research_claim_jobs(1, 15, array['search_miss'])"))?.code).toBe("42501");
     });
   });
 });

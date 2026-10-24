@@ -77,7 +77,11 @@ The request uses the basic `web_search_20250305` tool (no dynamic filtering), so
   - The stage must be a cited phrase that `stageFromText` maps to a tier; with no tier, the row is dropped.
   - The authority and the expected date (which must contain a 4-digit year) must sit within 200 characters of the name in the same citation, or that field is dropped.
   - The locality must map to exactly one active configured locality and be cited.
-  - The date must fall between last year and +15 years.
+  - The date must fall between last year and +10 years. A year that is an amount or distance ("Rs 2,030 crore", "2030 km"), or a part of a financial year ("2027" from "2027-28"), is dropped.
+  - A negated or future stage phrase ("has not been approved", "yet to be tendered", "will be opened"), whether in the phrase itself or in the four words before it, states no stage, so the item is dropped. Future intent still counts as `proposed`.
+  - The locality must be named in the development's own citation window, not elsewhere on the page.
   - Promotional names (appreciation, returns, investment …) are dropped.
-- **Store.** `development_store_research` saves rows unverified and unpublished, and audits each one as `researched` by `system:research`. Logs carry counts and drop reasons only.
+- **Store.** `development_store_research` saves rows unverified and unpublished, and audits each one as `researched` by `system:research`. A reviewed row is never overwritten (see DATA_MODEL). Logs carry counts and drop reasons only.
+- **Policy gate.** The research source must carry the registry permission `development_fields` (DATA_SOURCE_POLICY §11.3). Enqueue and the worker both refuse otherwise.
+- **Deploy order.** `0008` changes `research_claim_jobs(limit, stale)` to claim `search_miss` jobs only, and adds `research_claim_jobs(limit, stale, kinds)` for the S4a worker. Apply 0008 first, then deploy the app. A pre-S4a worker still running against the migrated database never claims an `area_developments` job, so it can't mistake one for a search. Deploying the app before 0008 fails the claim RPC call (unknown `p_kinds`) until the migration lands, which is safe: nothing is claimed.
 - **Fixture.** `sampleDevelopmentResponder` returns SAMPLE items on `example.org`: one fully cited, one with uncited authority and date (both fields dropped), and one fabricated (dropped). In e2e the worker endpoint is triggered with a test-only `RESEARCH_RUN_SECRET`.

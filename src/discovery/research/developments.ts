@@ -7,7 +7,16 @@ import { z } from "zod";
 import type { InfrastructureCategory, InfrastructureStage } from "@/domain/types";
 import { getLocality, isActiveLocality, listLocalities } from "@/config/markets";
 import { haversineMeters } from "@/locality/geo";
-import { DEVELOPMENT_RESEARCH_RADIUS_KM, isInfraCategory, isPromotionalText, stageFromText, withinHorizon } from "@/locality/developments";
+import {
+  DEVELOPMENT_HORIZON_YEARS,
+  DEVELOPMENT_RESEARCH_RADIUS_KM,
+  isInfraCategory,
+  isPromotionalText,
+  markersVoidStage,
+  stageFromText,
+  stageMarkers,
+  withinHorizon,
+} from "@/locality/developments";
 import { safeHttpsUrl } from "../adapter";
 import { normaliseUrl } from "../dedupe";
 import { SourceNotRunnableError, assertRunnable, type RuntimeEnv, type SourceEntry } from "../registry";
@@ -16,7 +25,7 @@ import { CandidateParseError, extractEvidence, parseCandidates, type ResearchEvi
 import { fakeCitedText, fakeResult, fakeSearchResult, fakeText } from "./fake-client";
 import { isBlockedPortalUrl } from "./portals";
 import { RESEARCH_MAX_SEARCHES } from "./prompt";
-import { citedPhrase, matchLocality, nameWindows } from "./validate";
+import { citedPhrase, matchLocality, nameWindows, words } from "./validate";
 
 /** Most development candidates considered per response. */
 export const MAX_DEVELOPMENT_CANDIDATES = 10;
@@ -56,7 +65,7 @@ export function buildDevelopmentUserPrompt(input: { localityName: string; nearby
     `Locality: <locality>${tagSafe(input.localityName)}</locality>, North Bengaluru, Karnataka, India.`,
     input.nearbyNames.length ? `Nearby localities we also cover: ${input.nearbyNames.map(tagSafe).join(", ")}.` : "",
     "",
-    `1. Search the web (at most ${RESEARCH_MAX_SEARCHES} searches) for public infrastructure planned, approved or under construction within about ${DEVELOPMENT_RESEARCH_RADIUS_KM} km of this locality that is expected between ${y} and ${y + 10}, or recently opened.`,
+    `1. Search the web (at most ${RESEARCH_MAX_SEARCHES} searches) for public infrastructure planned, approved or under construction within about ${DEVELOPMENT_RESEARCH_RADIUS_KM} km of this locality that is expected between ${y} and ${y + DEVELOPMENT_HORIZON_YEARS}, or recently opened.`,
     `2. For each development (at most ${MAX_DEVELOPMENT_CANDIDATES}), write one short paragraph citing the page that states its name, the locality or area it serves, its stage (for example proposed, approved, DPR approved, tendered, under construction, operational, shelved), the authority responsible and the expected completion date, each exactly as the page writes them. Skip any fact the page does not state.`,
     "3. Finish with one ```json fenced block holding an array. Each item:",
     '{"name": string, "category": "metro"|"suburban_rail"|"rail"|"road"|"flyover"|"ring_road"|"airport"|"zoning"|"water"|"power"|"other", "localityText": string|null, "stageText": string|null, "authority": string|null, "expectedCompletion": string|null, "sourceUrl": string}',
@@ -136,6 +145,58 @@ export function developmentNameKey(name: string): string {
   return name.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 
+/** Words just before a cited stage phrase that are checked for negation/future markers. */
+const STAGE_PREFIX_WORDS = 4;
+
+/**
+ * True when at least one cited occurrence of the stage phrase is not negated or future-tense by
+ * the few words before it ("has not been approved", "yet to be tendered", "will be operational").
+ */
+export function stageAffirmedInWindows(stageText: string, stage: InfrastructureStage, windows: readonly string[]): boolean {
+  const phrase = words(stageText);
+  for (const w of windows) {
+    const text = words(w);
+    for (let at = text.indexOf(phrase); at >= 0; at = text.indexOf(phrase, at + 1)) {
+      const before = text.slice(0, at).trim().split(" ").slice(-STAGE_PREFIX_WORDS).join(" ");
+      if (!markersVoidStage(stageMarkers(`${before} ${phrase}`), stage)) return true;
+    }
+  }
+  return false;
+}
+
+/** A unit after a 4-digit number means it is an amount or a distance, not a year. */
+const NOT_A_YEAR_AFTER = /^\s*(crores?|cr|lakhs?|lacs?|km|kms|m|mn|million|sq|ft)\b/;
+const NOT_A_YEAR_BEFORE = /(rs\.?|inr|₹)\s*$/;
+
+/**
+ * A declared date must state a year 2000–2100 that is not an amount ("Rs 2,030 crore", "2030 km")
+ * and, on the page, must not be cut out of a longer token: "2027" taken from "2027-28" would
+ * shorten a financial year, so the whole "2027-28" must be the declared value.
+ */
+export function declaredDateOk(value: string, windows: readonly string[]): boolean {
+  const v = value.normalize("NFKC").toLowerCase();
+  const years = [...v.matchAll(/(?<![\d,.])(\d{4})(?![\d,.])/g)];
+  if (!years.some((m) => Number(m[1]) >= 2000 && Number(m[1]) <= 2100)) return false;
+  for (const m of years) {
+    if (NOT_A_YEAR_AFTER.test(v.slice(m.index + 4)) || NOT_A_YEAR_BEFORE.test(v.slice(0, m.index))) return false;
+  }
+  const needle = v.replace(/\s+/g, " ").trim();
+  let found = false;
+  for (const w of windows) {
+    const text = w.normalize("NFKC").toLowerCase().replace(/\s+/g, " ");
+    for (let at = text.indexOf(needle); at >= 0; at = text.indexOf(needle, at + 1)) {
+      found = true;
+      const after = text.slice(at + needle.length);
+      const before = text.slice(0, at);
+      if (/^\s*[-–/]\s*\d{2}\b/.test(after) || /\d[-–/]\s*$/.test(before)) return false; // part of a financial year
+      if (/\d$/.test(needle) && (NOT_A_YEAR_AFTER.test(after) || /^[\d,]/.test(after))) return false;
+      if (/^\d/.test(needle) && (NOT_A_YEAR_BEFORE.test(before) || /[\d,.]$/.test(before))) return false;
+    }
+  }
+  // The value was copied from the page, so it must be found as written; otherwise it is not kept.
+  return found;
+}
+
 export function validateDevelopmentCandidates(
   candidates: readonly unknown[],
   evidence: ResearchEvidence,
@@ -182,15 +243,18 @@ export function validateDevelopmentCandidates(
     if (isPromotionalText(name)) return inc(dropped, "promotional");
     const inWindow = (v: string) => wins.some((w) => citedPhrase(v, w));
 
-    // Stage: the cited phrase decides the tier (constitution §5: no tier, no row).
+    // Stage: the cited phrase decides the tier (constitution §5: no tier, no row). A negated or
+    // future phrase ("has not been approved", "will be opened") states no tier, on its own or in
+    // the words just before it on the page.
     const stage = c.stageText && inWindow(c.stageText) ? stageFromText(c.stageText) : null;
-    if (!stage || !c.stageText) return inc(dropped, "stage_not_cited");
+    if (!stage || !c.stageText || !stageAffirmedInWindows(c.stageText, stage, wins)) return inc(dropped, "stage_not_cited");
 
+    // Locality: named in the same citation as the development, near its name (not elsewhere on the page).
     const loc = matchLocality(c.localityText);
     if (loc === "none") return inc(dropped, "out_of_market");
     if (loc === "ambiguous") return inc(dropped, "ambiguous_locality");
     const { locality, term } = loc;
-    if (!cited.some((t) => citedPhrase(term, t) || citedPhrase(locality.name, t))) return inc(dropped, "locality_not_cited");
+    if (!wins.some((w) => citedPhrase(term, w) || citedPhrase(locality.name, w))) return inc(dropped, "locality_not_cited");
 
     let authority: string | null = null;
     if (c.authority) {
@@ -199,7 +263,7 @@ export function validateDevelopmentCandidates(
     }
     let expectedCompletion: string | null = null;
     if (c.expectedCompletion) {
-      if (inWindow(c.expectedCompletion) && /\b\d{4}\b/.test(c.expectedCompletion)) expectedCompletion = c.expectedCompletion;
+      if (inWindow(c.expectedCompletion) && declaredDateOk(c.expectedCompletion, wins)) expectedCompletion = c.expectedCompletion;
       else inc(fieldsDropped, "expectedCompletion");
     }
     // Next 5–10 years: a cited date far outside the horizon (or long past) is not a plan for buyers.
@@ -261,6 +325,11 @@ export function nearbyLocalityNames(localityId: string): string[] {
     .slice(0, 12);
 }
 
+/** Policy gate (DATA_SOURCE_POLICY §11.3): the source's registry entry must permit storing development fields. */
+export function mayStoreDevelopments(source: Pick<SourceEntry, "storagePermissions">): boolean {
+  return source.storagePermissions.includes("development_fields");
+}
+
 export async function researchLocalityDevelopments(
   localityId: string,
   opts: { client: ResearchClient; source: SourceEntry; env: RuntimeEnv; now: Date; signal?: AbortSignal },
@@ -271,6 +340,7 @@ export async function researchLocalityDevelopments(
     if (e instanceof SourceNotRunnableError) throw new ResearchClientError("source_not_runnable", false);
     throw e;
   }
+  if (!mayStoreDevelopments(opts.source)) throw new ResearchClientError("source_not_runnable", false);
   if (opts.source.type === "fixture" && opts.client.kind !== "fake") throw new ResearchClientError("source_not_runnable", false);
   if (!canResearchDevelopments(opts.client)) throw new ResearchClientError("config", false);
   const locality = getLocality(localityId);

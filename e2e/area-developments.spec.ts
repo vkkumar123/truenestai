@@ -76,7 +76,9 @@ test.describe("area developments (S4a)", () => {
     await expect(item).toContainText("SAMPLE Metro Authority");
     await expect(item).toContainText(/Expected \(declared\) December \d{4}/);
     await expect(item).toContainText("not a TrueNest estimate or guarantee");
-    await expect(item).toContainText(/\d+(\.\d)? km straight-line from this project|\d+ m straight-line from this project/);
+    // The SAMPLE project's location is its locality centroid, so the distance says so (never "from this project").
+    await expect(item).toContainText(/(\d+\.\d km|\d+ m) straight-line from the Hebbal locality centre/);
+    await expect(item).not.toContainText("from this project");
     await expect(item).toContainText("Sample data — fictional");
     await expect(item).toContainText(/Seen on the source .* · Last checked /);
     await expect(item.getByRole("link")).toHaveAttribute("href", /^https:\/\/example\.org\/sample-developments\/hebbal\/metro$/);

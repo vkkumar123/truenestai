@@ -33,12 +33,14 @@ async function run(
   label: string,
   fn: () => Promise<DevelopmentResult<DevelopmentWriteOk>>,
   success: (r: DevelopmentWriteOk) => string,
+  /** Review actions (publish, unpublish, reject, restore) can change what buyers see. */
+  alwaysPublic = false,
 ): Promise<DevelopmentActionState> {
   try {
     const r = await fn();
     ensureRenderPhaseAfterAction("/admin/developments"); // see mpa.ts (dev-only)
     if (!r.ok) return { status: "error", error: r.error, message: r.message, ...(r.errors ? { errors: r.errors } : {}) };
-    if (r.changed) revalidateDevelopments(r.development.published || r.autoUnpublished);
+    if (r.changed) revalidateDevelopments(alwaysPublic || r.development.published || r.autoUnpublished);
     return {
       status: "success",
       message: r.changed ? success(r) : "Nothing changed.",
@@ -96,5 +98,5 @@ export async function updateDevelopmentAction(_prev: DevelopmentActionState, for
 export async function reviewDevelopmentAction(_prev: DevelopmentActionState, formData: FormData): Promise<DevelopmentActionState> {
   const action = String(formData.get("action") ?? "");
   const done: Record<string, string> = { publish: "Published.", unpublish: "Unpublished.", reject: "Rejected.", restore: "Restored to pending review." };
-  return run("review", () => reviewDevelopment(formEntries(formData)), () => done[action] ?? "Saved.");
+  return run("review", () => reviewDevelopment(formEntries(formData)), () => done[action] ?? "Saved.", true);
 }

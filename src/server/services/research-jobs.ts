@@ -11,6 +11,7 @@ import {
   researchQuery,
   type ResearchClient,
   type ResearchErrorCode,
+  type EvidenceStats,
 } from "@/discovery/research";
 import { requireStaff } from "../auth";
 import { UNKNOWN_CLIENT_KEY } from "../client-ip";
@@ -286,8 +287,21 @@ function withDeadline<T>(p: Promise<T>, controller: AbortController, ms: number)
  * Why a finished job stored nothing: "no_candidates" (the model found nothing), "drop_<reason>"
  * (the most frequent validator drop reason) or "not_stored" (accepted, then removed by dedupe).
  */
-export function noResultsCode(v: { received: number; accepted: number; dropped: Partial<Record<string, number>> }): string {
-  if (v.received === 0) return "no_candidates";
+export function noResultsCode(
+  v: { received: number; accepted: number; dropped: Partial<Record<string, number>> },
+  run?: { stopReason: string | null; evidence: EvidenceStats },
+): string {
+  if (v.received === 0) {
+    // Narrow "the model listed nothing" down to where the run came up empty.
+    if (!run) return "no_candidates";
+    const ev = run.evidence;
+    if (run.stopReason === "pause_turn") return "no_candidates_paused";
+    if (ev.searchResultBlocks === 0) return "no_candidates_no_search";
+    if (ev.searchErrors >= ev.searchResultBlocks) return "no_candidates_search_error";
+    if (ev.resultUrls === 0) return "no_candidates_no_hits";
+    if (ev.citations === 0) return "no_candidates_no_citations";
+    return "no_candidates";
+  }
   const top = Object.entries(v.dropped).sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0) || a[0].localeCompare(b[0]))[0];
   return top && (top[1] ?? 0) > 0 ? `drop_${top[0]}` : "not_stored";
 }
@@ -348,7 +362,7 @@ export async function runResearchBatch(deps: ResearchBatchDeps = {}): Promise<Re
         const status = stored.length ? "done" : "no_results";
         // A no_results job records why (a short code readable in the DB): no candidates at all,
         // or the most frequent validator drop reason.
-        const diagnosis = stored.length ? null : noResultsCode(r.validation);
+        const diagnosis = stored.length ? null : noResultsCode(r.validation, r);
         await repos.researchJobs.finish(job.id, { status, resultCount: stored.length, errorCode: diagnosis, listingIds: stored.map((l) => l.id) });
         const sum = (m: Partial<Record<string, number>>) => Object.values(m).reduce<number>((a, b) => a + (b ?? 0), 0);
         log.info("research.job_finished", {
@@ -363,6 +377,10 @@ export async function runResearchBatch(deps: ResearchBatchDeps = {}): Promise<Re
           fieldsDropped: sum(r.validation.fieldsDropped),
           fieldsDroppedBy: JSON.stringify(r.validation.fieldsDropped),
           diagnosis,
+          searchResultBlocks: r.evidence.searchResultBlocks,
+          searchErrors: r.evidence.searchErrors,
+          resultUrls: r.evidence.resultUrls,
+          citations: r.evidence.citations,
           reviewFlags: r.reviewFlags,
           inputTokens: r.usage.inputTokens,
           outputTokens: r.usage.outputTokens,

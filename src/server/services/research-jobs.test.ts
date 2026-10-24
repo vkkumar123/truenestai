@@ -49,6 +49,18 @@ describe("requestResearchOnMiss: enqueue dedupe and TTL", () => {
     expect(svc.noResultsCode({ received: 0, accepted: 0, dropped: {} })).toBe("no_candidates");
     expect(svc.noResultsCode({ received: 3, accepted: 0, dropped: { name_not_cited: 1, locality_not_cited: 2 } })).toBe("drop_locality_not_cited");
     expect(svc.noResultsCode({ received: 1, accepted: 1, dropped: {} })).toBe("not_stored");
+    const none = { received: 0, accepted: 0, dropped: {} };
+    const ev = (e: Partial<{ searchResultBlocks: number; searchErrors: number; resultUrls: number; citations: number }>) => ({
+      searchResultBlocks: 2, searchErrors: 0, resultUrls: 8, citations: 4, ...e,
+    });
+    expect(svc.noResultsCode(none, { stopReason: "pause_turn", evidence: ev({}) })).toBe("no_candidates_paused");
+    expect(svc.noResultsCode(none, { stopReason: "end_turn", evidence: ev({ searchResultBlocks: 0 }) })).toBe("no_candidates_no_search");
+    expect(svc.noResultsCode(none, { stopReason: "end_turn", evidence: ev({ searchErrors: 2 }) })).toBe("no_candidates_search_error");
+    expect(svc.noResultsCode(none, { stopReason: "end_turn", evidence: ev({ resultUrls: 0 }) })).toBe("no_candidates_no_hits");
+    expect(svc.noResultsCode(none, { stopReason: "end_turn", evidence: ev({ citations: 0 }) })).toBe("no_candidates_no_citations");
+    expect(svc.noResultsCode(none, { stopReason: "end_turn", evidence: ev({}) })).toBe("no_candidates");
+    for (const code of ["no_candidates_paused", "no_candidates_no_search", "no_candidates_search_error", "no_candidates_no_hits", "no_candidates_no_citations"])
+      expect(code).toMatch(/^[a-z_]{1,40}$/); // research_jobs.error_code CHECK
   });
 
   it("reuses a no_results job within RESEARCH_CACHE_HOURS and re-queues after it expires", async () => {
@@ -58,8 +70,8 @@ describe("requestResearchOnMiss: enqueue dedupe and TTL", () => {
     const deps = { repos, env: "test" as const, limiter: limiter(), processEnv: pe };
     await svc.requestResearchOnMiss({ queryText: "nothing here at all", clientKey: "1.1.1.1", userAgent: UA }, deps);
     const run = await svc.runResearchBatch({ repos, env: "test", client: new FakeResearchClient(), now: () => now });
-    expect(run.outcomes).toEqual([expect.objectContaining({ status: "no_results", resultCount: 0, errorCode: "no_candidates" })]);
-    expect((await repos.researchJobs.listRecent(1))[0].errorCode).toBe("no_candidates");
+    expect(run.outcomes).toEqual([expect.objectContaining({ status: "no_results", resultCount: 0, errorCode: "no_candidates_no_hits" })]);
+    expect((await repos.researchJobs.listRecent(1))[0].errorCode).toBe("no_candidates_no_hits");
 
     now = new Date("2026-10-22T23:00:00Z");
     expect(await svc.requestResearchOnMiss({ queryText: "nothing here at all", clientKey: "1.1.1.1", userAgent: UA }, deps)).toMatchObject({

@@ -11,7 +11,7 @@ export const RESEARCH_SYSTEM_PROMPT = [
   "You look up residential real-estate projects in North Bengaluru, India, for a buyer-information service.",
   "Use the web search tool to find residential projects (apartments, villas, plots) that match the buyer's search.",
   "Report only facts that are written on the pages you found. Never guess, infer or complete a project name, developer, address, RERA registration number or price.",
-  "Prefer the developer's own website and government or regulator pages. Do not use property listing portals.",
+  "Prefer the developer's own website and government or regulator pages; news and other pages that describe one project are fine too. Do not use property listing portals.",
   "Do not include personal data such as phone numbers, e-mail addresses or names of agents or owners.",
 ].join(" ");
 
@@ -32,6 +32,6 @@ export function buildResearchUserPrompt(input: { queryText: string; localityName
     `2. For each project you found (at most ${MAX_CANDIDATES}), write one short paragraph that states, citing the page, its name, developer, locality, address, RERA registration number(s), price and construction status exactly as the page writes them. Skip any fact the page does not state.`,
     "3. Finish with one ```json fenced block holding an array. Each item:",
     '{"name": string, "developerName": string|null, "localityText": string|null, "address": string|null, "reraNumbers": string[], "priceText": string|null, "constructionStatus": string|null, "sourceUrl": string, "quote": string|null}',
-    "Copy every value verbatim from the page at sourceUrl, which must be the exact URL of the page the facts came from. Use null or [] when the page does not state a value. If you found nothing reliable, output [].",
+    "Copy every value verbatim from the page at sourceUrl, which must be the exact URL of the page the facts came from. Use null or [] when the page does not state a value. A project whose name and locality a page states is worth listing even when its price or RERA number is not stated. Output [] only if no page you found names a matching project.",
   ].join("\n");
 }

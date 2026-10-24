@@ -322,4 +322,4 @@ the fixture mirrors them over the same in-memory observations array the fixture 
 to the model.
 
 **Owner action:** 0006 and 0007 must be applied to the staging database (then production) before
-extraction works outside fixture mode (`MCP_REQUESTS.md` R8).
+extraction works outside fixture mode (`MCP_REQUESTS.md` R14).

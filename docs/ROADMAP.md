@@ -76,7 +76,7 @@ Owner decision: staff upload K-RERA documents they downloaded by hand; AI extrac
 - [x] Admin: "Extract details" (staff only, audited), results table (attribute, value, page, excerpt, "Unverified — needs review", conflict), empty / error / unsupported states, limitation text; promotion of `address` / `rera_numbers` only through the existing audited edit (saved unverified). No public page changes.
 - [x] Tests: validator and service unit tests, `test:db` for 0007, Playwright upload → extract → review journey.
 - [ ] Quality-reviewer pass logged in `REVIEW_LOG.md`.
-- [ ] Fury: apply 0006 + 0007 to staging, set `ANTHROPIC_API_KEY` (R3, R8); validate on one real K-RERA certificate.
+- [ ] Fury: apply 0006 + 0007 to staging, set `ANTHROPIC_API_KEY` (R3, R14); validate on one real K-RERA certificate.
 
 ## M4 — First approved external source adapter — **owner: R5**
 - [ ] Source registry entry `approved` with documented access method and terms.

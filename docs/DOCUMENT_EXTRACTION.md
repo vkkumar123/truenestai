@@ -128,4 +128,4 @@ no network call:
 - No real Anthropic call has been made in development or CI. Only the fake client has been exercised.
   Validate the result on one real K-RERA certificate on staging before relying on it.
 - **0006 and 0007 must be applied to the staging database, then production, before this works outside
-  fixture mode** (`MCP_REQUESTS.md` R8).
+  fixture mode** (`MCP_REQUESTS.md` R14).

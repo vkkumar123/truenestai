@@ -43,3 +43,6 @@ next-env.d.ts
 /playwright-report/
 /test-results/
 /blob-report/
+
+# Agent git worktrees (local only)
+.claude/worktrees/

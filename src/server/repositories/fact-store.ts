@@ -1,6 +1,7 @@
 import "server-only";
 import { z } from "zod";
 import type { FactConflict, FactEstimateBasis, FactTruthStatus, FactValue, SourceRef, VerificationState } from "@/domain/types";
+import { getSource } from "@/discovery/registry";
 import { log } from "../log";
 
 // S1a fact store (supabase/migrations/0006_fact_store.sql, D18 proposed): the attribute catalogue
@@ -30,7 +31,10 @@ const a = (
   legacyField: string | null = null,
 ): FactAttribute => ({ entityType, attribute, valueKind, legallySignificant, defaultTtlHours, legacyField });
 
-/** KEEP IN SYNC with the fact_attributes seed in 0006_fact_store.sql (a unit test compares them). */
+/**
+ * KEEP IN SYNC with the fact_attributes seed in 0006_fact_store.sql plus the additions in
+ * 0007_document_extraction.sql (a unit test compares them).
+ */
 export const FACT_ATTRIBUTES: readonly FactAttribute[] = [
   a("project", "rera_status", "text", true, 168),
   a("project", "rera_registration_date", "date", true, 720),
@@ -71,7 +75,23 @@ export const FACT_ATTRIBUTES: readonly FactAttribute[] = [
   a("locality", "flooding_note", "text", false, 2160),
   a("locality", "major_employers", "json", false, 2160),
   a("locality", "school_hospital_note", "text", false, 2160),
+  // 0007 (S3a, D21): what a registration document states
+  a("project", "rera_numbers", "json", true, 720, "rera_numbers"),
+  a("project", "project_name", "text", false, 2160),
+  a("project", "promoter_name", "text", false, 2160),
+  a("project", "address", "text", false, 2160, "address"),
+  a("project", "plan_approvals", "json", true, 720),
 ];
+
+/**
+ * Registry source of an uploaded document -> observation source_type (mirrors extraction_finish in
+ * 0007): a regulator (K-RERA) document is 'rera', a SAMPLE fixture document 'fixture'; any other
+ * source cannot be extracted (null).
+ */
+export function documentSourceType(sourceId: string): "rera" | "fixture" | null {
+  const type = getSource(sourceId)?.type;
+  return type === "regulator" ? "rera" : type === "fixture" ? "fixture" : null;
+}
 
 export function getFactAttribute(entityType: string, attribute: string): FactAttribute | undefined {
   return FACT_ATTRIBUTES.find((x) => x.entityType === entityType && x.attribute === attribute);
@@ -265,9 +285,18 @@ export interface FactCandidateInput extends FactCandidateRow {
 }
 
 const TRUTH_RANK: Record<string, number> = { official: 0, estimated: 1, unknown: 2 };
+/** D21 (owner, 2026-10-24): inside a truth level, K-RERA first, then government, then the builder, then the rest. */
+export const SOURCE_TYPE_PRECEDENCE: readonly string[] = ["rera", "govt", "builder"];
+const sourceRank = (t: string | null | undefined) => {
+  const i = t ? SOURCE_TYPE_PRECEDENCE.indexOf(t) : -1;
+  return i === -1 ? SOURCE_TYPE_PRECEDENCE.length : i;
+};
 const CURATED_WINS: readonly string[] = ["source_confirmed", "reviewed"];
 
-/** facts_current ordering: verified curated first, then official > estimated > unknown, newest, id. */
+/**
+ * facts_current ordering: verified curated first, then official > estimated > unknown, then source
+ * type rera > govt > builder > rest (D21), then newest, then id.
+ */
 export function compareCandidates(x: FactCandidateRow, y: FactCandidateRow): number {
   // M5: only a verified KNOWN curated value overrides the observations
   const cv = (c: FactCandidateRow) =>
@@ -275,6 +304,7 @@ export function compareCandidates(x: FactCandidateRow, y: FactCandidateRow): num
   return (
     cv(x) - cv(y) ||
     TRUTH_RANK[x.truth_status] - TRUTH_RANK[y.truth_status] ||
+    sourceRank(x.source_type) - sourceRank(y.source_type) ||
     Date.parse(iso(y.observed_at)) - Date.parse(iso(x.observed_at)) ||
     (x.fact_id < y.fact_id ? -1 : x.fact_id > y.fact_id ? 1 : 0)
   );

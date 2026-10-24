@@ -246,7 +246,7 @@ is registered as type `developer`, but a search result is never an official figu
 
 | Object | What it holds |
 |---|---|
-| `fact_attributes` | The spec 02 attribute catalogue (39 rows: 28 project, 5 development, 6 locality). Schema metadata only: `value_kind`, `unit`, `default_ttl_hours` (assumptions), `legally_significant` (**proposed** for C7, `legal_flag_status = 'proposed'`), `legacy_field` (`declared_possession` → `promised_possession`). TS mirror: `FACT_ATTRIBUTES` in `src/server/repositories/fact-store.ts` (unit test compares it to the SQL seed). |
+| `fact_attributes` | The spec 02 attribute catalogue (39 rows in 0006: 28 project, 5 development, 6 locality; 44 after 0007 adds 5 project rows). Schema metadata only: `value_kind`, `unit`, `default_ttl_hours` (assumptions), `legally_significant` (**proposed** for C7, `legal_flag_status = 'proposed'`), `legacy_field` (`declared_possession` → `promised_possession`). TS mirror: `FACT_ATTRIBUTES` in `src/server/repositories/fact-store.ts` (unit test compares it to the SQL seed). |
 | `fact_observations` | One row per `(entity_type, entity_id, attribute, source_url)` (`unique nulls not distinct`), written by automation (`added_by` crawl / research / extraction) or staff. Entity types `project`, `locality` for now (existence checked by trigger). `value_text/num/date/json` must match the catalogue `value_kind`; `unknown` carries no value; a known value needs an `https` `source_url`; `estimate_basis` is required for, and only for, `estimated`, and must hold a non-empty `sources` array; a web research source always writes `source_type = 'search'`; `official` requires `source_type` in rera / builder / govt / fixture; `excerpt` ≤ 20 words; `last_verified_at ≥ observed_at`; `ttl_hours > 0`. **Every row is `unverified`** (CHECK `fact_observations_unverified_only`, staff rows included) until a staff RPC with an actor and an audit event exists. Identity columns, `added_by` and `is_sample` never change; for a project, `is_sample` must equal the project's at insert. |
 | `fact_observations_history` | The OLD row of every UPDATE/DELETE on `fact_observations` (no-op upserts skipped), with `operation` and `superseded_at`. Written only by a `security definer` trigger. |
 | `facts` (curated) | New nullable `truth_status`, `last_verified_at`, `ttl_hours`. Backfilled: an official source (above) → `official`, any other source (or none) → `estimated`, `unknown` stays `unknown`; `last_verified_at` = latest `fact_sources.observed_at`. The views always **derive truth at read time** with `tn_curated_truth_status` (the stored value is only a fallback), so a stored value cannot go stale when sources are added or the registry changes. |
@@ -294,6 +294,32 @@ view's rules). Tests: `tests/db/fact-store.test.ts`, `src/server/repositories/fa
   nothing in SQL refuses observations from a source that is not `approved` yet. That check ships with
   `crawl_targets` in S2a (plan §5: a target whose registry source is not approved cannot be scheduled).
 - C8 (news reports of official figures) is not modelled yet: news is never an official source here.
-- Only `declared_possession` maps to the catalogue; `address`, `rera_numbers` and `construction_status` map to
-  spec project columns in S1b, and unit price/area to `cost_sheets` (S5a).
+- `declared_possession`, `address` and `rera_numbers` (0007) map to the catalogue; `construction_status` maps to
+  a spec project column in S1b, and unit price/area to `cost_sheets` (S5a).
 - Locality observations have no `is_sample` cross-check (localities carry no such flag).
+
+## K-RERA document extraction (S3a, `0007_document_extraction.sql`, D21)
+Additive; 0001–0006 are unchanged. Flow, limits and tests: `DOCUMENT_EXTRACTION.md`.
+
+| Object | What changes |
+|---|---|
+| `fact_attributes` | +5 project rows: `rera_numbers` (json, legally significant, legacy `rera_numbers`), `project_name`, `promoter_name` (text), `address` (text, legacy `address`), `plan_approvals` (json, legally significant). 44 rows in total. |
+| `fact_observations` | New `document_id` (FK `project_documents`, on delete cascade) and `page_number` (1–10000), set together or not at all. A document row must have `added_by = 'extraction'`, `source_type` rera or fixture and an excerpt. A known value now needs an `https` `source_url` **or** a `document_id`. This is a **deliberate relaxation** of 0006's `value_matches_status`: the table CHECK accepts the document link as structural provenance, while constitution §1 (a reader can open the source) is enforced where document rows are written. `extraction_finish` refuses `succeeded` for a document without a `source_url`, and the upload requires the K-RERA page URL for RERA certificates and regulator sources, so every extracted row carries the document's `source_url`. The 0006 unique constraint is replaced by two partial unique indexes: `(entity_type, entity_id, attribute, source_url)` where `document_id` is null (nulls not distinct), and `(entity_type, entity_id, attribute, document_id)`. Trigger `tn_fact_observations_document_validate`: the document exists, belongs to the same project, the row cites the document's `source_id`, and `document_id` never changes. Every observation is still `unverified`. |
+| `fact_observations_history` | Gains `document_id` and `page_number`; the history trigger copies them. Still append-only. |
+| `document_extractions` | One row per document version (`document_id` unique, cascade): `status` running / succeeded / failed / unsupported, `error_code` (set exactly when failed or unsupported), `model`, `document_sha256`, `kept_count`, `dropped_count`, `dropped_reasons` jsonb (counts only, no text), `attempts`, `requested_by`/`requested_role`, `started_at`/`finished_at` (null exactly while running). Guard trigger: running → any final state, failed → running (retry), running → running (stale reclaim); succeeded and unsupported are final; DELETE refused except by cascade; TRUNCATE refused. |
+| `fact_review_events` | Action `document_extracted` (the audit event of every run; the note holds title, version and counts only). |
+| `extraction_start(document, model, actor, role, stale_minutes)` | Returns `started` (new row or retry/reclaim), `done` (final), `in_progress` or `not_found`. |
+| `extraction_finish(extraction, status, error_code, values, dropped_count, dropped_reasons, actor, role)` | Only on a running row (`not_running` otherwise). `succeeded` is refused for a document without a `source_url` and for a duplicate attribute in `values`. Inserts the kept values as `official` / `rera` (regulator source) or `fixture` / `extraction` / unverified with document, page and excerpt, `observed_at` = the document's observed date; any other source type raises. Writes the audit event. |
+| `facts_current` (view, redefined) | Same columns. Precedence (D21): verified known curated value wins; then official > estimated > unknown; then `source_type` rera > govt > builder > others; then newest `observed_at`; then id. Every other live row stays in `conflicts`. TS mirror: `compareCandidates` / `SOURCE_TYPE_PRECEDENCE` in `src/server/repositories/fact-store.ts`. |
+
+**Access:** RLS on `document_extractions`, no policies; default privileges revoked; `service_role` gets SELECT,
+INSERT, UPDATE only. Both RPCs are `security invoker`, EXECUTE granted to `service_role` only. `facts_current`
+grants are restated after the redefinition. No `anon`/`authenticated` access.
+
+**Server:** `DocumentExtractionRepository` (`getRepositories().documentExtractions`): Supabase calls the RPCs;
+the fixture mirrors them over the same in-memory observations array the fixture fact store reads.
+`SupabaseDocumentStorage.read` now downloads the stored object (null when missing) so the server can send it
+to the model.
+
+**Owner action:** 0006 and 0007 must be applied to the staging database (then production) before
+extraction works outside fixture mode (`MCP_REQUESTS.md` R14).

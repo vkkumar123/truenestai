@@ -12,6 +12,7 @@ const { createFixtureRepositories, SAMPLE_PROJECTS } = await import("./fixture")
 type Input = import("./fact-store").FactCandidateInput;
 
 const MIGRATION = path.resolve(import.meta.dirname, "../../../supabase/migrations/0006_fact_store.sql");
+const MIGRATION_0007 = path.resolve(import.meta.dirname, "../../../supabase/migrations/0007_document_extraction.sql");
 
 function cand(o: Partial<Input>): Input {
   return {
@@ -43,8 +44,8 @@ function cand(o: Partial<Input>): Input {
 }
 
 describe("attribute catalogue", () => {
-  it("TS mirror equals the fact_attributes seed in 0006_fact_store.sql", () => {
-    const sql = readFileSync(MIGRATION, "utf8");
+  it("TS mirror equals the fact_attributes seed in 0006_fact_store.sql plus the 0007 additions", () => {
+    const sql = readFileSync(MIGRATION, "utf8") + "\n" + readFileSync(MIGRATION_0007, "utf8");
     const re = /\('(project|development|locality|builder)',\s*'([a-z0-9_]+)',\s*'(\w+)',\s*(?:null|'[^']*'),\s*(true|false),\s*(\d+),\s*(null|'[a-z_]+')/g;
     const fromSql = [...sql.matchAll(re)].map((m) => ({
       entityType: m[1],
@@ -54,7 +55,7 @@ describe("attribute catalogue", () => {
       defaultTtlHours: Number(m[5]),
       legacyField: m[6] === "null" ? null : m[6].slice(1, -1),
     }));
-    expect(fromSql).toHaveLength(39);
+    expect(fromSql).toHaveLength(44);
     expect(fromSql).toEqual(FACT_ATTRIBUTES.map((x) => ({ ...x })));
   });
 
@@ -82,6 +83,28 @@ describe("resolveFactsCurrent (TS mirror of the facts_current view)", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ fact_id: "rera", conflict_count: 2, has_disagreement: true, is_stale: true }); // verified 2026-10-01 + 168 h < now
     expect(rows[0].conflicts.map((c) => c.fact_id)).toEqual(["builder", "est"]);
+  });
+
+  it("D21: within a truth level K-RERA beats a newer builder value, then govt, builder, rest; all kept in conflicts", () => {
+    const rows = resolveFactsCurrent(
+      [
+        cand({ fact_id: "builder-new", value_date: "2028-03-31", source_type: "builder", observed_at: "2026-10-15T00:00:00Z", last_verified_at: "2026-10-15T00:00:00Z" }),
+        cand({ fact_id: "news", value_date: "2028-06-30", source_type: "fixture", observed_at: "2026-10-16T00:00:00Z", last_verified_at: "2026-10-16T00:00:00Z" }),
+        cand({ fact_id: "govt", value_date: "2028-01-31", source_type: "govt", observed_at: "2026-09-02T00:00:00Z", last_verified_at: "2026-09-02T00:00:00Z" }),
+        cand({ fact_id: "rera-old", value_date: "2027-12-31", source_type: "rera", observed_at: "2026-08-01T00:00:00Z", last_verified_at: "2026-08-01T00:00:00Z" }),
+        cand({ fact_id: "est", value_date: "2029-01-31", truth_status: "estimated", estimate_basis: { sources: [] }, source_type: "rera", observed_at: "2026-10-18T00:00:00Z", last_verified_at: "2026-10-18T00:00:00Z" }),
+      ],
+      now,
+    );
+    expect(rows[0].fact_id).toBe("rera-old");
+    // official first (rera, govt, builder, rest), then the estimate — even an estimate from a RERA row
+    expect(rows[0].conflicts.map((c) => c.fact_id)).toEqual(["govt", "builder-new", "news", "est"]);
+    expect(rows[0]).toMatchObject({ conflict_count: 4, has_disagreement: true });
+    // a verified curated value still wins outright
+    const curated = cand({ fact_id: "cur", origin: "curated", source_type: "search", verification: "reviewed", added_by: "staff", observed_at: "2026-01-01T00:00:00Z", last_verified_at: "2026-01-01T00:00:00Z" });
+    const withCurated = resolveFactsCurrent([cand({ fact_id: "rera", source_type: "rera" }), curated], now)[0];
+    expect(withCurated.fact_id).toBe("cur");
+    expect(withCurated.conflicts.map((c) => c.fact_id)).toEqual(["rera"]);
   });
 
   it("M5: a reviewed curated UNKNOWN never overrides a known observation", () => {
@@ -185,8 +208,10 @@ describe("FixtureFactStoreRepository", () => {
   it("serves facts_current for a SAMPLE project: the registry date wins, builder + estimates + curated stay in conflicts", async () => {
     const repo = new FixtureFactStoreRepository(SAMPLE_PROJECTS, undefined, () => new Date("2026-10-16T00:00:00Z"));
     const facts = await repo.listCurrent("project", LAKEVIEW);
-    expect(facts.map((f) => f.attribute)).toEqual(["oc_status", "promised_possession"]);
-    const pp = facts[1];
+    // 0007: curated address + RERA numbers map to catalogue attributes too (legacy_field)
+    expect(facts.map((f) => f.attribute)).toEqual(["address", "oc_status", "promised_possession", "rera_numbers"]);
+    expect(facts.find((f) => f.attribute === "rera_numbers")).toMatchObject({ origin: "curated" });
+    const pp = facts.find((f) => f.attribute === "promised_possession")!;
     expect(pp).toMatchObject({ origin: "observation", factId: "sample-obs-lakeview-possession-registry", sourceType: "rera", hasDisagreement: true });
     expect(pp.fact.value).toBe("2029-06-30");
     expect(pp.fact.conflicts?.map((c) => [c.truth, c.value])).toEqual([
@@ -194,7 +219,7 @@ describe("FixtureFactStoreRepository", () => {
       ["estimated", "2029-12-31"],
       ["estimated", SAMPLE_PROJECTS.find((p) => p.id === LAKEVIEW)!.declaredPossession.value],
     ]);
-    const oc = facts[0];
+    const oc = facts.find((f) => f.attribute === "oc_status")!;
     expect(oc).toMatchObject({ isStale: false, requiresReview: true });
     expect(oc.fact).toMatchObject({ status: "unknown", value: null, truth: "unknown" });
     const later = new FixtureFactStoreRepository(SAMPLE_PROJECTS, undefined, () => new Date("2026-10-20T00:00:00Z"));
@@ -208,11 +233,11 @@ describe("FixtureFactStoreRepository", () => {
     const withSources = (sources: { sourceId: string; url: string; observedAt: string }[], value: string | null = "2027-12 (SAMPLE)") =>
       [{ ...lake, declaredPossession: { status: value === null ? "unknown" : "known", value, verification: "unverified", sources } as typeof lake.declaredPossession }];
     const pick = async (projects: typeof SAMPLE_PROJECTS) =>
-      (await new FixtureFactStoreRepository(projects, [], () => new Date(at)).listCurrent("project", LAKEVIEW))[0];
+      (await new FixtureFactStoreRepository(projects, [], () => new Date(at)).listCurrent("project", LAKEVIEW)).find((f) => f.attribute === "promised_possession");
     const web = await pick(withSources([{ sourceId: "anthropic-web-search", url: "https://example.com/sample/web", observedAt: at }]));
     expect(web).toMatchObject({ origin: "curated", sourceType: "search" });
-    expect(web.fact.truth).toBe("estimated");
-    expect(web.fact.estimateBasis?.sources.map((s) => s.sourceId)).toEqual(["anthropic-web-search"]);
+    expect(web!.fact.truth).toBe("estimated");
+    expect(web!.fact.estimateBasis?.sources.map((s) => s.sourceId)).toEqual(["anthropic-web-search"]);
     expect(await pick(withSources([]))).toBeUndefined();
     expect((await pick(withSources([], null)))?.fact.truth).toBe("unknown");
   });

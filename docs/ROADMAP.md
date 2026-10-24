@@ -69,6 +69,15 @@ Plan: `/mnt/project-files/truenest/specs-alignment-plan.md` §6. DB/server only,
 - [ ] Fury: C6/C7 decisions; staging then production apply.
 - [ ] Re-map M4–M8 onto spec slices S2–S10 (plan §4), once Fury answers the conflict register (D17).
 
+## S3a — K-RERA document extraction (D21) — **built 2026-10-24 on `feat/04-rera-document-extraction`**; review and staging apply pending
+Owner decision: staff upload K-RERA documents they downloaded by hand; AI extracts the details with page references for staff review; no automated K-RERA access. Details: `DOCUMENT_EXTRACTION.md`.
+- [x] `0007_document_extraction.sql` (additive): `document_extractions` (audited, RLS on, service role only), `fact_observations.document_id` + `page_number`, a document instead of a source URL for uploaded documents, all 0006 guarantees kept; `facts_current` precedence K-RERA > govt > builder > others (owner, D21).
+- [x] Server-only extraction service: Claude with citations; a value is kept only when verbatim in its citation's text, with that page; drops counted; no personal data stored; unverified official `rera` observations with excerpt ≤ 20 words; 120 s timeout, 15 MB / 100-page caps; images and non-PDFs unsupported; idempotent per document version; network-free fake client in fixture mode.
+- [x] Admin: "Extract details" (staff only, audited), results table (attribute, value, page, excerpt, "Unverified — needs review", conflict), empty / error / unsupported states, limitation text; promotion of `address` / `rera_numbers` only through the existing audited edit (saved unverified). No public page changes.
+- [x] Tests: validator and service unit tests, `test:db` for 0007, Playwright upload → extract → review journey.
+- [ ] Quality-reviewer pass logged in `REVIEW_LOG.md`.
+- [ ] Fury: apply 0006 + 0007 to staging, set `ANTHROPIC_API_KEY` (R3, R14); validate on one real K-RERA certificate.
+
 ## M4 — First approved external source adapter — **owner: R5**
 - [ ] Source registry entry `approved` with documented access method and terms.
 - [ ] Adapter implements `SourceAdapter`, respects rate limits/robots, stores no copied descriptions/images.
@@ -80,7 +89,7 @@ Plan: `/mnt/project-files/truenest/specs-alignment-plan.md` §6. DB/server only,
 - [ ] Manual-assisted: staff record registration/complaint/order with URL, observed date, as-printed reference.
 - [ ] Display copy: registration ≠ title; complaints shown factually with source.
 - [ ] Automated lookup only after permitted access is documented; otherwise feature-flagged off.
-- [ ] Optional: Python worker parses certificates → AI-extracted draft → reviewer.
+- [x] Certificates → AI-extracted draft → reviewer: done as S3a (staff upload + extraction, D21); no Python worker needed.
 
 ## M6 — Locality infrastructure, amenities, maps — **owner: R4**
 - [ ] Infrastructure items with stage + sources; declared completion never presented as a promise.

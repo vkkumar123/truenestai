@@ -61,9 +61,10 @@ d("document extraction (0007)", () => {
         ('sample-builder', 'SAMPLE Builder Site', 'developer', 'proposed', 'manual', 'https://example.com/');
       insert into staff_profiles (user_id, role) values ('${STAFF_UID}', 'admin');
       insert into project_documents (id, project_id, document_key, title, kind, version, source_id, source_url, observed_at, storage_path, content_type, size_bytes, sha256, uploaded_by) values
-        ('doc-rera',  'p1', 'rera-certificate', 'SAMPLE certificate', 'rera_certificate', 1, 'sample-regulator', null, '2026-10-01T00:00:00Z', 'p1/rera-certificate/v1/a.pdf', 'application/pdf', 1000, '${SHA}', 'staff-1'),
+        ('doc-rera',  'p1', 'rera-certificate', 'SAMPLE certificate', 'rera_certificate', 1, 'sample-regulator', 'https://example.org/sample-rera/p1-v1', '2026-10-01T00:00:00Z', 'p1/rera-certificate/v1/a.pdf', 'application/pdf', 1000, '${SHA}', 'staff-1'),
         ('doc-rera2', 'p1', 'rera-certificate', 'SAMPLE certificate', 'rera_certificate', 2, 'sample-regulator', 'https://example.org/sample-rera/p1', '2026-10-05T00:00:00Z', 'p1/rera-certificate/v2/a.pdf', 'application/pdf', 1000, '${SHA}', 'staff-1'),
         ('doc-brochure', 'p1', 'brochure', 'SAMPLE brochure', 'brochure', 1, 'sample-builder', 'https://example.com/sample/p1/brochure', '2026-10-01T00:00:00Z', 'p1/brochure/v1/a.pdf', 'application/pdf', 1000, '${SHA}', 'staff-1'),
+        ('doc-nourl', 'p1', 'legacy-certificate', 'SAMPLE legacy certificate', 'rera_certificate', 1, 'sample-regulator', null, '2026-10-01T00:00:00Z', 'p1/legacy-certificate/v1/a.pdf', 'application/pdf', 1000, '${SHA}', 'staff-1'),
         ('doc-p2', 'p2', 'rera-certificate', 'SAMPLE certificate', 'rera_certificate', 1, 'sample-regulator', null, '2026-10-01T00:00:00Z', 'p2/rera-certificate/v1/a.pdf', 'application/pdf', 1000, '${SHA}', 'staff-1');
     `);
   });
@@ -112,7 +113,7 @@ d("document extraction (0007)", () => {
     expect(out.s3.outcome).toBe("done");
     expect(out.obs).toHaveLength(4);
     for (const o of out.obs) {
-      expect(o).toMatchObject({ status: "official", source_type: "rera", verification: "unverified", added_by: "extraction", document_id: "doc-rera", source_url: null, is_sample: true });
+      expect(o).toMatchObject({ status: "official", source_type: "rera", verification: "unverified", added_by: "extraction", document_id: "doc-rera", source_url: "https://example.org/sample-rera/p1-v1", is_sample: true });
     }
     expect(out.obs.find((o) => o.attribute === "total_units")).toMatchObject({ value_num: "240", page_number: 2 });
     expect(out.obs.find((o) => o.attribute === "rera_numbers").value_json).toEqual(["SAMPLE/RERA/0042/2026"]);
@@ -165,6 +166,33 @@ d("document extraction (0007)", () => {
       }
     });
     expect(e).toBe("23514");
+  });
+
+  it("finishing as succeeded is refused for a document without a source URL (constitution §1) and for a duplicate attribute", async () => {
+    const run = (doc: string, values: string) =>
+      asRole(c, "service_role", null, async (q) => {
+        const s = (await q.query(start(doc))).rows[0].r;
+        const f = finish(s.extraction.id, "succeeded", values);
+        try {
+          await q.query(f.sql, f.params);
+          return null;
+        } catch (err) {
+          return (err as { message?: string }).message;
+        }
+      });
+    expect(await run("doc-nourl", VALUES)).toMatch(/without a source URL/);
+    const dup = JSON.stringify([
+      { attribute: "total_units", value_num: 240, page_number: 2, excerpt: "Number of Units: 240" },
+      { attribute: "total_units", value_num: 250, page_number: 2, excerpt: "Number of Units: 250" },
+    ]);
+    expect(await run("doc-rera2", dup)).toMatch(/duplicate attribute/);
+    // an unsupported outcome for the URL-less document is still recorded (nothing stored)
+    const done = await asRole(c, "service_role", null, async (q) => {
+      const s = (await q.query(start("doc-nourl"))).rows[0].r;
+      const f = finish(s.extraction.id, "unsupported", "[]", "source_url_missing");
+      return (await q.query(f.sql, f.params)).rows[0].r;
+    });
+    expect(done).toMatchObject({ status: "ok", extraction: { status: "unsupported", error_code: "source_url_missing", kept_count: 0 } });
   });
 
   it("document observations: constraints keep provenance, the 0006 guarantees and the document's project", async () => {

@@ -41,6 +41,7 @@ export type ExtractionErrorCode =
   | "auth"
   | "bad_request"
   | "refused"
+  | "truncated"
   | "file_missing"
   | "checksum_mismatch"
   | "config"
@@ -49,7 +50,8 @@ export type ExtractionErrorCode =
   | "not_pdf"
   | "too_large"
   | "too_many_pages"
-  | "source_not_supported";
+  | "source_not_supported"
+  | "source_url_missing";
 
 export class ExtractionClientError extends Error {
   constructor(readonly code: ExtractionErrorCode) {

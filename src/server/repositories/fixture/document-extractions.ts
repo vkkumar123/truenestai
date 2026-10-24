@@ -68,6 +68,9 @@ export class FixtureDocumentExtractionRepository implements DocumentExtractionRe
     if (input.status === "succeeded") {
       const sourceType = documentSourceType(doc.source.sourceId);
       if (!sourceType) throw new Error("only regulator or fixture documents can be extracted");
+      // mirrors extraction_finish (0007): constitution §1, and one value per attribute
+      if (!doc.source.url) throw new Error("a document without a source URL cannot be extracted as succeeded");
+      if (new Set(input.values.map((v) => v.attribute)).size !== input.values.length) throw new Error("duplicate attribute in extraction values");
       for (const v of input.values) {
         const attr = getFactAttribute("project", v.attribute);
         if (!attr) throw new Error(`unknown attribute ${v.attribute}`);

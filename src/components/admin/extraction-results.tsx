@@ -12,6 +12,9 @@ const ERROR_TEXT: Record<string, string> = {
   too_large: "The PDF is larger than the extraction limit (15 MB).",
   too_many_pages: "The PDF has more pages than the extraction limit (100).",
   source_not_supported: "Only documents whose source is the regulator (K-RERA) can be extracted.",
+  source_url_missing:
+    "This document has no source URL, so extracted details could not cite where they came from. Upload it again as a new version with the K-RERA page address.",
+  truncated: "The AI answer was cut off before it finished, so nothing was saved. Try again.",
   timeout: "The extraction took longer than 2 minutes and was stopped.",
   rate_limited: "The AI service was busy. Try again in a few minutes.",
   api_error: "The AI service returned an error.",
@@ -32,6 +35,8 @@ const DROP_TEXT: Record<string, string> = {
   duplicate: "duplicate",
   conflicting: "conflicting value in the same document",
   unknown_attribute: "not a requested detail",
+  other_page: "list item cited on a different page",
+  multi_page: "citation spans several pages",
 };
 
 const SOURCE_TYPE_TEXT: Record<string, string> = { rera: "K-RERA", govt: "government", builder: "builder", fixture: "SAMPLE fixture", search: "web search" };

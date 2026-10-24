@@ -1,5 +1,6 @@
 import "server-only";
 import { z } from "zod";
+import { getSource } from "@/discovery/registry";
 import { isAutomatedActor } from "@/research/evidence";
 import { requireStaff, type StaffSession } from "../auth";
 import { log } from "../log";
@@ -67,6 +68,14 @@ const metaSchema = z.object({
   sourceUrl: z.preprocess(empty, z.url({ protocol: /^https$/, message: "must be an https URL" }).max(2000).nullable().optional()),
 });
 
+export const SOURCE_URL_REQUIRED_MESSAGE =
+  "required for K-RERA documents and RERA certificates: paste the https address of the K-RERA page you downloaded it from";
+
+/** A RERA certificate, or any document from a regulator source (K-RERA), needs its source URL (D19). */
+export function requiresSourceUrl(kind: string, sourceId: string): boolean {
+  return kind === "rera_certificate" || getSource(sourceId)?.type === "regulator";
+}
+
 const fail = (error: DocumentErrorCode, message: string, errors?: string[]): UploadDocumentResult =>
   errors ? { ok: false, error, message, errors } : { ok: false, error, message };
 
@@ -84,6 +93,11 @@ export async function uploadProjectDocument(input: UploadDocumentInput, deps: Do
   const errors = parsed.success ? [] : parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`);
   if (parsed.success && !listResearchSources().some((s) => s.id === parsed.data.sourceId)) {
     errors.push(`sourceId: ${UNKNOWN_SOURCE_MESSAGE}`);
+  }
+  // D19: a K-RERA document (regulator source) or a RERA certificate must record the page it was
+  // downloaded from, so every value extracted from it has a source a reader can open (constitution §1).
+  if (parsed.success && !parsed.data.sourceUrl && requiresSourceUrl(parsed.data.kind, parsed.data.sourceId)) {
+    errors.push(`sourceUrl: ${SOURCE_URL_REQUIRED_MESSAGE}`);
   }
   const file = input?.file;
   const bytes = file?.bytes;
@@ -161,6 +175,6 @@ export async function getDocumentDownload(documentId: string, deps: DocumentDeps
   const signed = await repos.documentStorage.signedUrl(doc.storagePath, SIGNED_URL_TTL_SECONDS);
   if (signed) return { kind: "redirect", url: signed };
   const obj = await repos.documentStorage.read(doc.storagePath);
-  if (!obj) return null;
+  if (!obj?.contentType) return null; // never serve bytes we cannot identify
   return { kind: "bytes", bytes: obj.bytes, contentType: obj.contentType, fileName: doc.storagePath.split("/").pop()! };
 }

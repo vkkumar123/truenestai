@@ -25,11 +25,12 @@ export function fakeText(text: string): ExtractionContentBlock {
   return { type: "text", text, citations: null };
 }
 
-export function fakeCited(text: string, citedText: string, page: number): ExtractionContentBlock {
+/** `endPage` is exclusive, as in the API (default: the one page `page`). */
+export function fakeCited(text: string, citedText: string, page: number, endPage = page + 1): ExtractionContentBlock {
   return {
     type: "text",
     text,
-    citations: [{ type: "page_location", cited_text: citedText, document_index: 0, document_title: null, start_page_number: page, end_page_number: page + 1, file_id: null }],
+    citations: [{ type: "page_location", cited_text: citedText, document_index: 0, document_title: null, start_page_number: page, end_page_number: endPage, file_id: null }],
   };
 }
 

@@ -71,8 +71,10 @@ export interface DocumentStorage {
   /**
    * Raw bytes → null when absent. Staff downloads in Supabase mode go through signed URLs; raw reads
    * there are for server-side processing only (document extraction, S3a). Never logs the path.
+   * `contentType` is the type sniffed from the bytes, or null when they are not a PDF/PNG/JPEG
+   * (callers decide: extraction maps it to unsupported/not_pdf; downloads refuse it).
    */
-  read(path: string): Promise<{ bytes: Uint8Array; contentType: DocumentContentType } | null>;
+  read(path: string): Promise<{ bytes: Uint8Array; contentType: DocumentContentType | null } | null>;
 }
 
 /** DEV ONLY: objects in this process's memory; lost on restart. */
@@ -121,7 +123,7 @@ export class SupabaseDocumentStorage implements DocumentStorage {
     if (error || !data?.signedUrl) throw new Error("signed URL failed");
     return data.signedUrl;
   }
-  async read(path: string): Promise<{ bytes: Uint8Array; contentType: DocumentContentType } | null> {
+  async read(path: string): Promise<{ bytes: Uint8Array; contentType: DocumentContentType | null } | null> {
     const { data, error } = await this.db().storage.from(DOCUMENT_BUCKET).download(path);
     if (error) {
       const status = String((error as { statusCode?: string | number }).statusCode ?? "");
@@ -130,7 +132,6 @@ export class SupabaseDocumentStorage implements DocumentStorage {
     }
     if (!data) return null;
     const bytes = new Uint8Array(await data.arrayBuffer());
-    const contentType = sniffContentType(bytes);
-    return contentType ? { bytes, contentType } : null;
+    return { bytes, contentType: sniffContentType(bytes) };
   }
 }

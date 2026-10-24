@@ -110,8 +110,11 @@ export function DocumentUploadForm({
           </Select>
         </div>
         <div className="space-y-1">
-          <Label htmlFor={id("url")} className="text-xs">Source URL (optional, https)</Label>
-          <Input id={id("url")} name="sourceUrl" type="url" inputMode="url" placeholder="https://…" />
+          <Label htmlFor={id("url")} className="text-xs">Source URL (https; required for K-RERA documents and RERA certificates)</Label>
+          <Input id={id("url")} name="sourceUrl" type="url" inputMode="url" placeholder="https://…" aria-describedby={id("url-hint")} />
+          <p id={id("url-hint")} className="text-xs text-muted-foreground">
+            For a K-RERA document, paste the address of the K-RERA page you downloaded it from. Extracted details cite this page.
+          </p>
         </div>
       </div>
       <div className="space-y-1">

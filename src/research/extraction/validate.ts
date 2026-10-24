@@ -5,7 +5,10 @@
 //   1. its attribute is one we asked for (EXTRACTION_ATTRIBUTES);
 //   2. the line carries at least one page_location citation;
 //   3. the value appears VERBATIM (after whitespace normalisation, case-sensitive) inside one of
-//      that line's cited_text passages — the citation's page is recorded;
+//      that line's cited_text passages, as whole tokens (not "40" inside "240", "2" inside "112/2"
+//      or "registered" inside "unregistered") — the citation's page is recorded. A citation that
+//      spans several pages is not used (we record exactly one page per value); every item of a
+//      list attribute must be cited on the same page as the first;
 //   4. it contains no personal data (people's names, phone numbers, e-mails, ID numbers); a
 //      promoter must read as a company or organisation;
 //   5. it parses as the attribute's kind (number / ISO date / list) within a sane range.
@@ -25,7 +28,9 @@ export type DropReason =
   | "personal_data"
   | "invalid_value"
   | "duplicate"
-  | "conflicting";
+  | "conflicting"
+  | "other_page"
+  | "multi_page";
 
 export interface ExtractedValue {
   attribute: string;
@@ -57,6 +62,8 @@ export interface BlockLike {
 interface PageCitation {
   citedText: string;
   page: number;
+  /** Pages covered (end_page_number is exclusive in the API); 1 when the end is missing. */
+  span: number;
 }
 
 interface Line {
@@ -75,7 +82,8 @@ export function linesFromBlocks(blocks: readonly BlockLike[]): Line[] {
     const cites: PageCitation[] = [];
     for (const c of b.citations ?? []) {
       if (c.type === "page_location" && typeof c.cited_text === "string" && Number.isInteger(c.start_page_number) && c.start_page_number! >= 1) {
-        cites.push({ citedText: c.cited_text, page: c.start_page_number! });
+        const end = Number.isInteger(c.end_page_number) ? c.end_page_number! : c.start_page_number! + 1;
+        cites.push({ citedText: c.cited_text, page: c.start_page_number!, span: Math.max(1, end - c.start_page_number!) });
       }
     }
     b.text.split("\n").forEach((part, i) => {
@@ -165,10 +173,31 @@ export function parsePrintedNumber(v: string, attr: ExtractionAttribute): number
   return n;
 }
 
+// ---- verbatim match ----
+
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+
+/**
+ * Index of the value inside the (whitespace-normalised) cited text as whole tokens, or -1. The value
+ * may not touch a letter or digit, nor continue through a joiner ("/", ".", ",", "-") into one:
+ * "2" is not in "112/2", "40" is not in "240" or "1,240", "registered" is not in "unregistered";
+ * "3" is in "Towers: 3." and "240" in "Units: 240".
+ */
+export function findVerbatim(citedText: string, value: string): number {
+  const v = normalizeWs(value);
+  if (!v) return -1;
+  const re = new RegExp(
+    `(?<![\\p{L}\\p{N}])(?<![\\p{L}\\p{N}][/.,\\-])${escapeRegExp(v)}(?![\\p{L}\\p{N}])(?![/.,\\-][\\p{L}\\p{N}])`,
+    "u",
+  );
+  const m = re.exec(normalizeWs(citedText));
+  return m ? m.index : -1;
+}
+
 // ---- excerpt ----
 
 /** <= 20 words of the cited passage around the value (the value itself when the window holds personal data). */
-export function buildExcerpt(citedText: string, value: string): string {
+export function buildExcerpt(citedText: string, value: string, index?: number): string {
   const cited = normalizeWs(citedText);
   const val = normalizeWs(value);
   const valueWords = val.split(" ");
@@ -177,7 +206,7 @@ export function buildExcerpt(citedText: string, value: string): string {
     while (out.length > MAX_EXCERPT_CHARS && out.includes(" ")) out = out.slice(0, out.lastIndexOf(" "));
     return out.slice(0, MAX_EXCERPT_CHARS);
   };
-  const at = cited.indexOf(val);
+  const at = index !== undefined && index >= 0 && cited.startsWith(val, index) ? index : cited.indexOf(val);
   if (at === -1 || valueWords.length >= MAX_EXCERPT_WORDS) return clamp(valueWords);
   const before = cited.slice(0, at).trim();
   const after = cited.slice(at + val.length).trim();
@@ -222,11 +251,25 @@ export function validateExtraction(blocks: readonly BlockLike[]): ExtractionVali
       drop("not_cited");
       continue;
     }
-    const cite = line.citations.find((c) => normalizeWs(c.citedText).includes(value));
-    if (!cite) {
+    const matches = line.citations.map((c) => ({ c, at: findVerbatim(c.citedText, value) })).filter((x) => x.at >= 0);
+    if (matches.length === 0) {
       drop("not_verbatim");
       continue;
     }
+    const onePage = matches.filter((x) => x.c.span === 1);
+    if (onePage.length === 0) {
+      drop("multi_page");
+      continue;
+    }
+    // a list keeps one page: later items must be cited on the first item's page
+    const listed = attr.kind === "json" ? lists.get(attr.attribute) : undefined;
+    const match = listed === undefined ? onePage[0] : onePage.find((x) => x.c.page === listed.pageNumber);
+    if (!match) {
+      drop(listed?.valueJson!.includes(value) ? "duplicate" : "other_page");
+      continue;
+    }
+    const cite = match.c;
+    const excerptOf = () => buildExcerpt(cite.citedText, value, match.at);
     if (containsPersonalData(value) || (attr.attribute === "promoter_name" && !looksLikeOrganisation(value))) {
       drop("personal_data");
       continue;
@@ -248,7 +291,7 @@ export function validateExtraction(blocks: readonly BlockLike[]): ExtractionVali
         continue;
       }
       if (existing) existing.valueJson!.push(value);
-      else lists.set(attr.attribute, { ...base, valueJson: [value], excerpt: buildExcerpt(cite.citedText, value) });
+      else lists.set(attr.attribute, { ...base, valueJson: [value], excerpt: excerptOf() });
       continue;
     }
 
@@ -272,7 +315,7 @@ export function validateExtraction(blocks: readonly BlockLike[]): ExtractionVali
       drop(same ? "duplicate" : "conflicting");
       continue;
     }
-    scalars.set(attr.attribute, { ...next, excerpt: buildExcerpt(cite.citedText, value) });
+    scalars.set(attr.attribute, { ...next, excerpt: excerptOf() });
   }
 
   const kept = [...scalars.values(), ...lists.values()];

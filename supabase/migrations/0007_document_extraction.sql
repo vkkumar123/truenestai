@@ -55,8 +55,11 @@ alter table public.fact_observations
     document_id is null
     or (added_by = 'extraction' and source_type in ('rera','fixture') and excerpt is not null));
 
--- Relaxed provenance rule: a known value needs a source URL OR (an uploaded document has none) a
--- document_id. Unchanged for every row without a document_id.
+-- Deliberately relaxed provenance rule: a known value needs a source URL OR a document_id. Unchanged
+-- for every row without a document_id. The table CHECK stays relaxed so the document link (document +
+-- page + excerpt) is the structural provenance; the "a reader can open the source" rule (constitution
+-- §1) is enforced where document rows are written: extraction_finish refuses to succeed for a
+-- document without a source_url, and the upload requires the K-RERA page URL (D19).
 alter table public.fact_observations drop constraint fact_observations_value_matches_status;
 alter table public.fact_observations add constraint fact_observations_value_matches_status check (
   (status = 'unknown' and value_text is null and value_num is null and value_date is null and value_json is null)
@@ -290,6 +293,18 @@ begin
     v_source_type := case v_doc.source_kind when 'regulator' then 'rera' when 'fixture' then 'fixture' end;
     if v_source_type is null then
       raise exception 'only regulator or fixture documents can be extracted' using errcode = 'check_violation';
+    end if;
+    -- constitution §1: every served value needs a source a reader can open. A document value carries
+    -- the document's source_url (the K-RERA page staff downloaded it from); without one, refuse.
+    if v_doc.source_url is null then
+      raise exception 'a document without a source URL cannot be extracted as succeeded' using errcode = 'check_violation';
+    end if;
+    if jsonb_typeof(coalesce(p_values, '[]'::jsonb)) <> 'array' then
+      raise exception 'p_values must be an array' using errcode = 'check_violation';
+    end if;
+    if (select count(*) from jsonb_array_elements(coalesce(p_values, '[]'::jsonb)) e)
+       <> (select count(distinct e->>'attribute') from jsonb_array_elements(coalesce(p_values, '[]'::jsonb)) e) then
+      raise exception 'duplicate attribute in extraction values' using errcode = 'check_violation';
     end if;
     for v in select * from jsonb_array_elements(coalesce(p_values, '[]'::jsonb)) loop
       insert into public.fact_observations (entity_type, entity_id, attribute, value_text, value_num, value_date, value_json,

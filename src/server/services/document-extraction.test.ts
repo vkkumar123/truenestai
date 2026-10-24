@@ -24,14 +24,14 @@ const noStaff = async () => {
 const PROJECT = "sample-proj-lakeview";
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0]);
 
-async function setup(over: { sourceId?: string; bytes?: Uint8Array; type?: string; name?: string; sourceUrl?: string | null } = {}) {
+async function setup(over: { sourceId?: string; kind?: string; bytes?: Uint8Array; type?: string; name?: string; sourceUrl?: string | null } = {}) {
   const repos = createFixtureRepositories();
   const up = await uploadProjectDocument(
     {
       projectId: PROJECT,
       documentKey: "rera-certificate",
       title: "SAMPLE registration certificate",
-      kind: "rera_certificate",
+      kind: over.kind ?? "rera_certificate",
       sourceId: over.sourceId ?? "k-rera",
       sourceUrl: over.sourceUrl === undefined ? "https://example.org/sample-rera/certificate" : over.sourceUrl,
       file: { name: over.name ?? "sample-rera-certificate.pdf", type: over.type ?? "application/pdf", bytes: over.bytes ?? buildSampleReraPdf() },
@@ -165,11 +165,42 @@ describe("extractDocument (fixture repositories + fake client)", () => {
     expect(saved).toMatchObject({ ok: true });
     if (!saved.ok) throw new Error();
     expect(saved.project.reraNumbers).toMatchObject({ value: ["SAMPLE/RERA/0042/2026"], verification: "unverified" });
-    // no document URL → no promotion offered, with the reason
-    const noUrl = await setup({ sourceUrl: null });
-    await extractDocument(noUrl.doc.id, { repos: noUrl.repos, requireStaff: admin, client: new FakeExtractionClient() });
-    const address = (await getDocumentExtractionViews(PROJECT, { repos: noUrl.repos, requireStaff: admin }))[noUrl.doc.id].values.find((x) => x.attribute === "address")!;
-    expect(address.promote).toBeNull();
-    expect(address.promoteBlocked).toMatch(/source URL/);
+  });
+
+  it("a K-RERA document or RERA certificate needs its source URL at upload; a document without one is never extracted", async () => {
+    await expect(setup({ sourceUrl: null })).rejects.toThrow(/correct the document details/);
+    await expect(setup({ sourceUrl: null, sourceId: "sample-feed" })).rejects.toThrow(); // kind rera_certificate
+    await expect(setup({ sourceUrl: null, kind: "other" })).rejects.toThrow(); // source k-rera (regulator)
+    // a SAMPLE fixture document of another kind may be uploaded without a URL, but extraction refuses it (final)
+    const { repos, doc } = await setup({ sourceUrl: null, sourceId: "sample-feed", kind: "other" });
+    const client = new FakeExtractionClient();
+    expect(await extractDocument(doc.id, { repos, requireStaff: admin, client })).toMatchObject({
+      outcome: "unsupported", extraction: { status: "unsupported", errorCode: "source_url_missing", keptCount: 0 },
+    });
+    expect(client.calls).toHaveLength(0);
+    expect(await repos.documentExtractions.listObservationsForProject(PROJECT)).toEqual([]);
+  });
+
+  it("a cut-off answer (max_tokens) fails as truncated, stores nothing, and can be retried", async () => {
+    const { repos, doc } = await setup();
+    const cut = new FakeExtractionClient(async (req) => ({ ...(await sampleExtractionResponder(req)), stopReason: "max_tokens" }));
+    expect(await extractDocument(doc.id, { repos, requireStaff: admin, client: cut })).toMatchObject({
+      outcome: "failed", extraction: { status: "failed", errorCode: "truncated", keptCount: 0 },
+    });
+    expect(await repos.documentExtractions.listObservationsForProject(PROJECT)).toEqual([]);
+    expect(await extractDocument(doc.id, { repos, requireStaff: admin, client: new FakeExtractionClient() })).toMatchObject({
+      outcome: "succeeded", extraction: { attempts: 2, keptCount: 11 },
+    });
+  });
+
+  it("stored bytes that are not a recognisable file are unsupported (not_pdf), not missing", async () => {
+    const { repos, doc } = await setup();
+    const read = vi.spyOn(repos.documentStorage, "read").mockResolvedValue({ bytes: new TextEncoder().encode("<html>"), contentType: null });
+    const client = new FakeExtractionClient();
+    expect(await extractDocument(doc.id, { repos, requireStaff: admin, client })).toMatchObject({
+      outcome: "unsupported", extraction: { errorCode: "not_pdf" },
+    });
+    expect(client.calls).toHaveLength(0);
+    read.mockRestore();
   });
 });

@@ -47,7 +47,7 @@ export const EXTRACTION_MAX_PAGES = 100;
 export const EXTRACTION_STALE_MINUTES = 10;
 
 /** Failure codes that are final for a document version (it never changes). */
-const UNSUPPORTED: ReadonlySet<ExtractionErrorCode> = new Set(["not_pdf", "too_large", "too_many_pages", "source_not_supported"]);
+const UNSUPPORTED: ReadonlySet<ExtractionErrorCode> = new Set(["not_pdf", "too_large", "too_many_pages", "source_not_supported", "source_url_missing"]);
 
 export interface ExtractionDeps {
   repos?: Repositories;
@@ -72,6 +72,8 @@ function unsupportedReason(doc: StoredDocument, production: boolean): Extraction
   const source = getSource(doc.source.sourceId);
   if (!documentSourceType(doc.source.sourceId) || !source) return "source_not_supported";
   if (source.type === "fixture" && production) return "source_not_supported";
+  // constitution §1 / D19: every extracted value cites the document's source page; none → no values
+  if (!doc.source.url) return "source_url_missing";
   if (doc.sizeBytes !== null && doc.sizeBytes > EXTRACTION_MAX_BYTES) return "too_large";
   return null;
 }
@@ -135,6 +137,8 @@ export async function extractDocument(documentId: string, deps: ExtractionDeps =
       return await end(UNSUPPORTED.has(code) ? "unsupported" : "failed", code);
     }
     if (response.stopReason === "refusal") return await end("failed", "refused");
+    // a cut-off answer may have lost values or split a line: record nothing, staff can retry
+    if (response.stopReason === "max_tokens") return await end("failed", "truncated");
 
     const result = validateExtraction(response.content);
     const finished = await repos.documentExtractions.finish(
@@ -146,7 +150,6 @@ export async function extractDocument(documentId: string, deps: ExtractionDeps =
       ...ctx,
       kept: result.kept.length,
       dropped: result.droppedCount,
-      truncated: response.stopReason === "max_tokens",
       inputTokens: response.usage.inputTokens,
       outputTokens: response.usage.outputTokens,
     });

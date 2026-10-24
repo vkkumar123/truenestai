@@ -5,8 +5,9 @@ each with a page reference. Staff review the draft. **TrueNest never accesses K-
 (D16, D19): no crawling, no form submission, no CAPTCHA solving.
 
 ## Flow
-1. **Upload.** In admin, open the project. Under Documents, upload the PDF and pick source **K-RERA**, the
-   K-RERA page URL (optional, but promotion needs it), and the date it was observed. Versioning works as
+1. **Upload.** In admin, open the project. Under Documents, upload the PDF and pick source **K-RERA**.
+   The **source URL is required** for a RERA certificate or any K-RERA document: paste the address of the
+   K-RERA page you downloaded it from. Every extracted value cites it (constitution §1). Versioning works as
    for any document (`project_documents`, `0004`).
 2. **Extract details.** This is a button on each version. It is a staff-only server action
    (`extractDocumentAction` → `extractDocument` in `src/server/services/document-extraction.ts`).
@@ -15,6 +16,7 @@ each with a page reference. Staff review the draft. **TrueNest never accesses K-
    - These are final `unsupported` outcomes:
      - The file is not a PDF (`not_pdf`). There is no OCR.
      - The source is neither the regulator type nor the SAMPLE fixture (`source_not_supported`). The fixture is refused in production.
+     - The document has no source URL (`source_url_missing`). Upload a new version with the URL.
      - The file is over 15 MB (`too_large`).
      - The page count is over 100 (`too_many_pages`). The count is a heuristic: it counts `/Type /Page`.
    - These are `failed` outcomes that staff can retry:
@@ -27,24 +29,31 @@ each with a page reference. Staff review the draft. **TrueNest never accesses K-
      data.
    - Answer format: `attribute | value` lines.
    - Limits: a 120 s `AbortSignal` timeout, `maxRetries: 0`, and `max_tokens` 16000.
-   - A `refusal` stop reason fails the run with `refused`.
+   - A `refusal` stop reason fails the run with `refused`. A `max_tokens` stop (a cut-off answer) fails
+     it with `truncated` and stores nothing. Both can be retried.
+   - Stored bytes that are not a recognisable PDF are `unsupported` / `not_pdf`.
    - Model: `ANTHROPIC_MODEL`, default `claude-opus-5-5`.
    - Key: `ANTHROPIC_API_KEY`, server only. If the key is missing, the run fails with `config`.
 5. **Validation** (`validateExtraction` in `src/research/extraction/validate.ts`):
    - It is deterministic and makes no model call.
-   - A value is kept only if it appears verbatim in the `cited_text` of a citation on its line, ignoring
-     whitespace differences. The page is that citation's `start_page_number`.
-   - Drops are counted by reason: `unknown_attribute`, `not_cited`, `not_verbatim`, `personal_data`,
-     `invalid_value`, `duplicate`, `conflicting`.
+   - A value is kept only if it appears verbatim, as whole tokens, in the `cited_text` of a citation on
+     its line, ignoring whitespace differences. "40" is not found in "240", "2" is not found in "112/2",
+     and "registered" is not found in "unregistered". The page is that citation's `start_page_number`.
+   - A citation that spans more than one page is not used. If no one-page citation contains the value,
+     it is dropped (`multi_page`). All items of a list (`rera_numbers`, `plan_approvals`) must be cited
+     on the first item's page; other items are dropped (`other_page`).
+   - Drops are counted by reason: `unknown_attribute`, `not_cited`, `not_verbatim`, `multi_page`,
+     `other_page`, `personal_data`, `invalid_value`, `duplicate`, `conflicting`.
 6. **Store.** `extraction_finish` (0007) writes each kept value to `fact_observations` with:
    - `truth_status = 'official'`
    - `source_type = 'rera'` (or `fixture`)
    - `added_by = 'extraction'`
    - `verification = 'unverified'`
-   - `document_id`, `page_number`, and an excerpt of at most 20 words
+   - `document_id`, `page_number`, the document's `source_url`, and an excerpt of at most 20 words
    - `observed_at` set to the document's observed date
 
-   It also records the counts on `document_extractions` and writes the audit event `document_extracted`.
+   It refuses `succeeded` for a document without a source URL or with a duplicate attribute. It also
+   records the counts on `document_extractions` and writes the audit event `document_extracted`.
    The note holds only the title, version and counts.
 7. **Review.** The document row shows a table of attribute, value, page, excerpt, "Unverified — needs
    review" and a conflict marker. A conflict marker means another live value, for example the curated

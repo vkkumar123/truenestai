@@ -13,6 +13,7 @@ const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0
 async function uploadDocument(page: Page, title: string, key: string, file: { name: string; mimeType: string; buffer: Buffer }) {
   const docs = page.getByRole("region", { name: "Documents" });
   await docs.getByText("Upload a document or new version").click();
+  await expect(docs.getByLabel(/^Source URL \(https; required for K-RERA documents and RERA certificates\)/)).toBeVisible();
   await docs.getByLabel("Title").fill(title);
   await docs.getByLabel("Document key").fill(key);
   await docs.getByLabel("Kind").selectOption("rera_certificate");

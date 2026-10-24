@@ -57,6 +57,43 @@ describe("validateExtraction (anti-fabrication)", () => {
     expect(r.dropped).toEqual({ not_verbatim: 3 });
   });
 
+  it("matches whole tokens only: a value inside a longer number, reference or word is not verbatim", () => {
+    const r = validateExtraction([
+      ...line("towers", "2", "Survey No. 112/2, SAMPLE village", 1),
+      ...line("floors", "1", "Survey No. 112/2, SAMPLE village", 1),
+      ...line("rera_status", "registered", "Status: unregistered", 1),
+      ...line("total_units", "40", "Number of Units: 240", 2),
+      ...line("land_area_acres", "240", "Total area 1,240 Acres", 2),
+    ]);
+    expect(r.kept).toEqual([]);
+    expect(r.dropped).toEqual({ not_verbatim: 5 });
+    // a token at the end of a sentence or after a colon still matches, and the excerpt is taken at the match
+    const ok = validateExtraction([
+      ...line("towers", "3", "Number of Towers: 3. Number of Floors: 14", 2),
+      ...line("total_units", "240", "Plot 240-A; Number of Units: 240", 2),
+    ]);
+    expect(ok.kept.map((k) => [k.attribute, k.valueNum])).toEqual([["towers", 3], ["total_units", 240]]);
+    expect(ok.dropped).toEqual({});
+  });
+
+  it("list items keep one page: an item cited on another page is dropped as other_page", () => {
+    const r = validateExtraction([
+      ...line("plan_approvals", "SAMPLE/PS/0001/2025", "Plan Sanction: SAMPLE/PS/0001/2025", 2),
+      ...line("plan_approvals", "SAMPLE/PS/0002/2025", "Plan Sanction: SAMPLE/PS/0002/2025", 2),
+      ...line("plan_approvals", "SAMPLE/PS/0003/2025", "Plan Sanction: SAMPLE/PS/0003/2025", 3),
+    ]);
+    expect(r.kept).toEqual([expect.objectContaining({ attribute: "plan_approvals", pageNumber: 2, valueJson: ["SAMPLE/PS/0001/2025", "SAMPLE/PS/0002/2025"] })]);
+    expect(r.dropped).toEqual({ other_page: 1 });
+  });
+
+  it("a citation spanning more than one page is not used (multi_page); a one-page citation on the line still is", () => {
+    const span = [fakeText("total_units | "), fakeCited("240", "Number of Units: 240", 1, 3), fakeText("\n")];
+    expect(validateExtraction(span)).toMatchObject({ kept: [], dropped: { multi_page: 1 } });
+    const cite = (start: number, end: number) => ({ type: "page_location", cited_text: "Number of Units: 240", start_page_number: start, end_page_number: end });
+    const both: BlockLike[] = [fakeText("total_units | "), { type: "text", text: "240", citations: [cite(1, 3), cite(2, 3)] }, fakeText("\n")];
+    expect(validateExtraction(both).kept[0]).toMatchObject({ valueNum: 240, pageNumber: 2 });
+  });
+
   it("drops personal data: people's names, phone numbers, e-mails, ID numbers, and an individual as promoter", () => {
     const cited = "Contact Person: Mr. Example Person, Phone 9000000000, sample.person@example.com, PAN ABCDE1234F, Aadhaar 1234 5678 9012";
     const r = validateExtraction([

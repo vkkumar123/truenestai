@@ -1,6 +1,6 @@
 # Spec 06 — Developments, geocoding, and proximity
 
-**Needs from Fury:** Google Maps Platform key (Geocoding + Distance Matrix),
+**Needs from Fury:** Google Maps Platform key (Geocoding + Routes API),
 seed list of developments (a starter list is below — verify before trusting).
 
 ## Goal
@@ -70,7 +70,7 @@ where st_dwithin(p.geom, d.geom, 15000)       -- 15 km radius
 on conflict (project_id, development_id) do update set straight_line_m = excluded.straight_line_m, computed_at = now();
 ```
 For rows ≤ 10 km and `type in ('employment','metro','suburban_rail','hospital','mall')`,
-call Distance Matrix with departure 09:00 IST next weekday → `drive_min_9am`.
+call Routes API with departure 09:00 IST next weekday → `drive_min_9am`.
 Cache 30 days. Budget: ~80 projects × ~25 developments = 2,000 calls/month.
 
 ## Rendering contract (used by spec 08/09)

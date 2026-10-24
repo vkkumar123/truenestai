@@ -53,9 +53,9 @@ Status: `open` | `in_progress` | `done` | `declined`. Nothing here has been conf
 - Env: `BRAVE_API_KEY` (server/worker only).
 
 ## R10 — Google Maps Platform (geocoding, distance) — open
-- Purpose: project geocoding (spec 06 A), straight-line + 9 AM drive time (spec 06 D, spec 13). Enable Geocoding API and Distance Matrix API on project `truenestai`; restrict the key by API and (for the browser key, later) by referrer.
+- Purpose: project geocoding (spec 06 A), straight-line + 9 AM drive time (spec 06 D, spec 13). Enable Geocoding API and Routes API (computeRouteMatrix) on project `truenestai`; restrict the key by API and (for the browser key, later) by referrer.
 - Setup: `gcloud services enable geocoding-backend.googleapis.com distance-matrix-backend.googleapis.com`; create a server key in Console → Credentials; store as `truenest-staging-google-maps-api-key` in Secret Manager; export `GOOGLE_MAPS_API_KEY` locally for the MCP server.
-- Budget: ~2,000 Distance Matrix calls/month at launch; set a billing alert at ₹2,000.
+- Budget: ~2,000 Routes API calls/month at launch; set a billing alert at ₹2,000.
 
 ## R11 — Reddit and YouTube Data APIs (community signals) — open
 - Reddit: create a "script" app at https://www.reddit.com/prefs/apps → `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, user agent `truenest/0.1 (by u/<handle>)`.

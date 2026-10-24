@@ -298,7 +298,7 @@ view's rules). Tests: `tests/db/fact-store.test.ts`, `src/server/repositories/fa
   a spec project column in S1b, and unit price/area to `cost_sheets` (S5a).
 - Locality observations have no `is_sample` cross-check (localities carry no such flag).
 
-## K-RERA document extraction (S3a, `0007_document_extraction.sql`, D19)
+## K-RERA document extraction (S3a, `0007_document_extraction.sql`, D21)
 Additive; 0001–0006 are unchanged. Flow, limits and tests: `DOCUMENT_EXTRACTION.md`.
 
 | Object | What changes |
@@ -310,7 +310,7 @@ Additive; 0001–0006 are unchanged. Flow, limits and tests: `DOCUMENT_EXTRACTIO
 | `fact_review_events` | Action `document_extracted` (the audit event of every run; the note holds title, version and counts only). |
 | `extraction_start(document, model, actor, role, stale_minutes)` | Returns `started` (new row or retry/reclaim), `done` (final), `in_progress` or `not_found`. |
 | `extraction_finish(extraction, status, error_code, values, dropped_count, dropped_reasons, actor, role)` | Only on a running row (`not_running` otherwise). `succeeded` is refused for a document without a `source_url` and for a duplicate attribute in `values`. Inserts the kept values as `official` / `rera` (regulator source) or `fixture` / `extraction` / unverified with document, page and excerpt, `observed_at` = the document's observed date; any other source type raises. Writes the audit event. |
-| `facts_current` (view, redefined) | Same columns. Precedence (D19): verified known curated value wins; then official > estimated > unknown; then `source_type` rera > govt > builder > others; then newest `observed_at`; then id. Every other live row stays in `conflicts`. TS mirror: `compareCandidates` / `SOURCE_TYPE_PRECEDENCE` in `src/server/repositories/fact-store.ts`. |
+| `facts_current` (view, redefined) | Same columns. Precedence (D21): verified known curated value wins; then official > estimated > unknown; then `source_type` rera > govt > builder > others; then newest `observed_at`; then id. Every other live row stays in `conflicts`. TS mirror: `compareCandidates` / `SOURCE_TYPE_PRECEDENCE` in `src/server/repositories/fact-store.ts`. |
 
 **Access:** RLS on `document_extractions`, no policies; default privileges revoked; `service_role` gets SELECT,
 INSERT, UPDATE only. Both RPCs are `security invoker`, EXECUTE granted to `service_role` only. `facts_current`

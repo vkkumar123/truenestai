@@ -1,5 +1,5 @@
 // S3a K-RERA document extraction (0007_document_extraction.sql): document_extractions, the
-// extraction RPCs, document-linked observations, their constraints and grants, and the D19 source
+// extraction RPCs, document-linked observations, their constraints and grants, and the D21 source
 // precedence in facts_current. Every row is fictional SAMPLE data (example.com / example.org).
 // Run with `npm run test:db`.
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -264,7 +264,7 @@ d("document extraction (0007)", () => {
     expect(hist).toEqual({ live: 0, history: [{ operation: "DELETE", document_id: "doc-rera", page_number: 2 }] });
   });
 
-  it("D19: a K-RERA document value beats a newer builder-site value; both appear (rera first) and nothing is hidden", async () => {
+  it("D21: a K-RERA document value beats a newer builder-site value; both appear (rera first) and nothing is hidden", async () => {
     const rows = await asRole(c, "service_role", null, async (q) => {
       const rera = docObs({ attribute: "rera_completion_date", value_num: null, value_date: "2028-12-31", excerpt: "Proposed Date of Completion: 31-12-2028", page_number: 1, ttl_hours: 168 });
       await q.query(rera.sql, rera.params);
@@ -286,7 +286,7 @@ d("document extraction (0007)", () => {
     ]);
   });
 
-  it("D19: a verified curated value still wins outright over a K-RERA observation", async () => {
+  it("D21: a verified curated value still wins outright over a K-RERA observation", async () => {
     const rows = await asRole(c, "service_role", null, async (q) => {
       await q.query(`select research_set_fact('p1', 'address', 'known', '"SAMPLE Road 9 (curated)"'::jsonb, 'reviewed',
         '[{"sourceId":"sample-builder","url":"https://example.com/sample/p1/address","observedAt":"2026-01-01T00:00:00Z"}]'::jsonb, 'staff-1', 'admin')`);

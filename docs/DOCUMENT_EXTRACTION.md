@@ -1,8 +1,8 @@
-# K-RERA document extraction (S3a, D19)
+# K-RERA document extraction (S3a, D21)
 
 Staff upload a K-RERA document they downloaded by hand. Claude reads it and drafts the project details,
 each with a page reference. Staff review the draft. **TrueNest never accesses K-RERA automatically**
-(D16, D19): no crawling, no form submission, no CAPTCHA solving.
+(D16, D21): no crawling, no form submission, no CAPTCHA solving.
 
 ## Flow
 1. **Upload.** In admin, open the project. Under Documents, upload the PDF and pick source **K-RERA**.
@@ -99,7 +99,7 @@ ids and counts only.
 - Observations are unique per `(entity, attribute, document_id)`.
 - A new version of a document is a new document row, so it gets its own extraction.
 
-## Precedence (D19)
+## Precedence (D21)
 `facts_current` picks one value per attribute, in this order:
 1. A verified, known curated value.
 2. Truth status: official, then estimated, then unknown.

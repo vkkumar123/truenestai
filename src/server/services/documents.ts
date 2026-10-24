@@ -71,7 +71,7 @@ const metaSchema = z.object({
 export const SOURCE_URL_REQUIRED_MESSAGE =
   "required for K-RERA documents and RERA certificates: paste the https address of the K-RERA page you downloaded it from";
 
-/** A RERA certificate, or any document from a regulator source (K-RERA), needs its source URL (D19). */
+/** A RERA certificate, or any document from a regulator source (K-RERA), needs its source URL (D21). */
 export function requiresSourceUrl(kind: string, sourceId: string): boolean {
   return kind === "rera_certificate" || getSource(sourceId)?.type === "regulator";
 }
@@ -94,7 +94,7 @@ export async function uploadProjectDocument(input: UploadDocumentInput, deps: Do
   if (parsed.success && !listResearchSources().some((s) => s.id === parsed.data.sourceId)) {
     errors.push(`sourceId: ${UNKNOWN_SOURCE_MESSAGE}`);
   }
-  // D19: a K-RERA document (regulator source) or a RERA certificate must record the page it was
+  // D21: a K-RERA document (regulator source) or a RERA certificate must record the page it was
   // downloaded from, so every value extracted from it has a source a reader can open (constitution §1).
   if (parsed.success && !parsed.data.sourceUrl && requiresSourceUrl(parsed.data.kind, parsed.data.sourceId)) {
     errors.push(`sourceUrl: ${SOURCE_URL_REQUIRED_MESSAGE}`);

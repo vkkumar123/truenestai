@@ -1,4 +1,4 @@
-// Anti-fabrication + personal-data validator for document extraction (S3a, D19). Pure; no I/O.
+// Anti-fabrication + personal-data validator for document extraction (S3a, D21). Pure; no I/O.
 //
 // The model answers "attribute | value" lines; the API attaches page_location citations
 // (cited_text + page numbers) to the text it cites. A value is KEPT only when:

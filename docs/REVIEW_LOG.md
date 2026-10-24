@@ -126,7 +126,7 @@ Verdict: **PASS**. Validator untouched; prompt still forbids guessing; counts-on
 - L1: fixed — docs/comment now call dynamic filtering the suspected (not confirmed) cause.
 
 ## S3a K-RERA extraction — review round 1 (2026-10-24)
-Input: 20ac74b (0007, extraction service, admin UI, tests, D19 precedence); check 433, test:db 90, build, e2e 53.
+Input: 20ac74b (0007, extraction service, admin UI, tests, D21 precedence); check 433, test:db 90, build, e2e 53.
 Verdict: **CHANGES REQUIRED** (1 high, 2 medium, 4 low). All addressed in the follow-up change on the same branch.
 - H1: the verbatim check matched substrings ("2" in "112/2", "registered" in "unregistered", "40" in "240"). Fixed: `findVerbatim` matches whole tokens (no adjacent letter/digit, no joiner `/ . , -` into one); the excerpt is taken at the match; unit tests for the four cases.
 - M1: list attributes kept only the first item's page. Fixed: an item cited on another page is dropped as `other_page` (tested).

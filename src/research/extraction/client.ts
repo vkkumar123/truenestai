@@ -1,4 +1,4 @@
-// Document extraction client contract (S3a, D19). The real implementation (Anthropic Messages API
+// Document extraction client contract (S3a, D21). The real implementation (Anthropic Messages API
 // with a PDF document block and citations) lives in
 // src/server/integrations/anthropic-extraction-client.ts (server-only). Fixture mode, unit tests and
 // CI use FakeExtractionClient (./fake-client.ts), which never touches the network.

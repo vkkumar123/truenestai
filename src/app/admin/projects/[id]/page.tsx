@@ -278,7 +278,7 @@ function DocumentsSection({
                               Download<span className="sr-only"> version {d.version} of {d.title}</span>
                             </a>
                           </div>
-                          {/* S3a: K-RERA document extraction (staff upload + AI extraction only, D19) */}
+                          {/* S3a: K-RERA document extraction (staff upload + AI extraction only, D21) */}
                           {status === "succeeded" || status === "unsupported" || status === "running" ? null : (
                             <ExtractDocumentForm documentId={d.id} label={label} retry={status === "failed"} />
                           )}

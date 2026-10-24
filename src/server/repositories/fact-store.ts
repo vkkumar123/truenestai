@@ -75,7 +75,7 @@ export const FACT_ATTRIBUTES: readonly FactAttribute[] = [
   a("locality", "flooding_note", "text", false, 2160),
   a("locality", "major_employers", "json", false, 2160),
   a("locality", "school_hospital_note", "text", false, 2160),
-  // 0007 (S3a, D19): what a registration document states
+  // 0007 (S3a, D21): what a registration document states
   a("project", "rera_numbers", "json", true, 720, "rera_numbers"),
   a("project", "project_name", "text", false, 2160),
   a("project", "promoter_name", "text", false, 2160),
@@ -285,7 +285,7 @@ export interface FactCandidateInput extends FactCandidateRow {
 }
 
 const TRUTH_RANK: Record<string, number> = { official: 0, estimated: 1, unknown: 2 };
-/** D19 (owner, 2026-10-24): inside a truth level, K-RERA first, then government, then the builder, then the rest. */
+/** D21 (owner, 2026-10-24): inside a truth level, K-RERA first, then government, then the builder, then the rest. */
 export const SOURCE_TYPE_PRECEDENCE: readonly string[] = ["rera", "govt", "builder"];
 const sourceRank = (t: string | null | undefined) => {
   const i = t ? SOURCE_TYPE_PRECEDENCE.indexOf(t) : -1;
@@ -295,7 +295,7 @@ const CURATED_WINS: readonly string[] = ["source_confirmed", "reviewed"];
 
 /**
  * facts_current ordering: verified curated first, then official > estimated > unknown, then source
- * type rera > govt > builder > rest (D19), then newest, then id.
+ * type rera > govt > builder > rest (D21), then newest, then id.
  */
 export function compareCandidates(x: FactCandidateRow, y: FactCandidateRow): number {
   // M5: only a verified KNOWN curated value overrides the observations

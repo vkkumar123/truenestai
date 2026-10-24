@@ -30,7 +30,7 @@ Status: `open` | `in_progress` | `done` | `declined`. Nothing here has been conf
 ## R6 — K-RERA public records access (production integration) — open
 - Purpose: registration, complaint and order lookups for projects.
 - Needed: confirm permitted automated access or obtain an official data channel; until then, manual lookup by staff with recorded URL and date. Details in `docs/research/REGULATORY_SOURCES.md`.
-- Owner decision 2026-10-24 (D19): no automated K-RERA access, ever. Staff download documents by hand and upload them; AI extraction drafts the details for review (S3a, R8).
+- Owner decision 2026-10-24 (D21): no automated K-RERA access, ever. Staff download documents by hand and upload them; AI extraction drafts the details for review (S3a, R8).
 
 ## R7 — GCP hosting (Cloud Run) and deploy access — in_progress (bootstrap applied 2026-10-22)
 - Decision: Cloud Run in `asia-south1` + Supabase Mumbai (owner, 2026-10-21). Full guide: `DEPLOYMENT.md`.

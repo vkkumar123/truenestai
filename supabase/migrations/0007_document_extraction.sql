@@ -1,4 +1,4 @@
--- S3a: K-RERA document extraction (D19). Additive only; 0001–0006 are never edited.
+-- S3a: K-RERA document extraction (D21). Additive only; 0001–0006 are never edited.
 --
 -- Owner decision (Fury, 2026-10-24): K-RERA documents reach TrueNest ONLY by staff upload. Staff
 -- download a document from K-RERA by hand and upload it in admin; Claude reads the PDF and
@@ -59,7 +59,7 @@ alter table public.fact_observations
 -- for every row without a document_id. The table CHECK stays relaxed so the document link (document +
 -- page + excerpt) is the structural provenance; the "a reader can open the source" rule (constitution
 -- §1) is enforced where document rows are written: extraction_finish refuses to succeed for a
--- document without a source_url, and the upload requires the K-RERA page URL (D19).
+-- document without a source_url, and the upload requires the K-RERA page URL (D21).
 alter table public.fact_observations drop constraint fact_observations_value_matches_status;
 alter table public.fact_observations add constraint fact_observations_value_matches_status check (
   (status = 'unknown' and value_text is null and value_num is null and value_date is null and value_json is null)
@@ -347,7 +347,7 @@ grant execute on function public.extraction_finish(text, text, text, jsonb, inte
 
 -- ---------------------------------------------------------------------------
 -- facts_current, redefined (same columns, same order): source precedence inside each truth
--- level (D19). Precedence: a KNOWN curated value whose verification is source_confirmed or
+-- level (D21). Precedence: a KNOWN curated value whose verification is source_confirmed or
 -- reviewed wins; otherwise official > estimated > unknown; then source_type rera > govt >
 -- builder > everything else; then newest observed_at; then id. Every other live row is listed in
 -- `conflicts` (never hidden, constitution §3). Mirror: compareCandidates in fact-store.ts.
@@ -409,7 +409,7 @@ ranked as (
       partition by c.entity_type, c.entity_id, c.attribute
       order by c.curated_verified desc,
                array_position(array['official','estimated','unknown'], c.truth_status),
-               -- D19 (owner, 2026-10-24): K-RERA first, then government, then the builder, then the rest
+               -- D21 (owner, 2026-10-24): K-RERA first, then government, then the builder, then the rest
                coalesce(array_position(array['rera','govt','builder'], c.source_type), 4),
                c.observed_at desc,
                c.fact_id

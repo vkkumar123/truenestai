@@ -1,4 +1,4 @@
-// S3a K-RERA document extraction (D19), fixture mode: a staff member uploads the fictional SAMPLE
+// S3a K-RERA document extraction (D21), fixture mode: a staff member uploads the fictional SAMPLE
 // registration PDF with source K-RERA, runs "Extract details", and sees the extracted values with
 // page numbers, excerpts, the "Unverified — needs review" label, the limitation notice and a
 // conflict marker. An image upload comes back as unsupported. The fake extraction client never

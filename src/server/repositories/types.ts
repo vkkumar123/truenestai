@@ -298,7 +298,7 @@ export interface FactStoreRepository {
   getCurrent(entityType: FactEntityType, entityId: string, attribute: string): Promise<CurrentFact | null>;
 }
 
-// ---- S3a: K-RERA document extraction (0007_document_extraction.sql, D19) ----
+// ---- S3a: K-RERA document extraction (0007_document_extraction.sql, D21) ----
 
 export type DocumentExtractionStatus = "running" | "succeeded" | "failed" | "unsupported";
 

@@ -29,7 +29,7 @@ import {
 import { documentSourceType } from "../repositories/fact-store";
 import { MAX_DOCUMENT_BYTES, sha256Hex } from "../storage/documents";
 
-// K-RERA document extraction (S3a, D19). Owner decision 2026-10-24: K-RERA documents reach
+// K-RERA document extraction (S3a, D21). Owner decision 2026-10-24: K-RERA documents reach
 // TrueNest only by staff upload; Claude reads each uploaded PDF and extracts project details with
 // page citations for staff review. TrueNest never accesses K-RERA itself (D16).
 //
@@ -72,7 +72,7 @@ function unsupportedReason(doc: StoredDocument, production: boolean): Extraction
   const source = getSource(doc.source.sourceId);
   if (!documentSourceType(doc.source.sourceId) || !source) return "source_not_supported";
   if (source.type === "fixture" && production) return "source_not_supported";
-  // constitution §1 / D19: every extracted value cites the document's source page; none → no values
+  // constitution §1 / D21: every extracted value cites the document's source page; none → no values
   if (!doc.source.url) return "source_url_missing";
   if (doc.sizeBytes !== null && doc.sizeBytes > EXTRACTION_MAX_BYTES) return "too_large";
   return null;

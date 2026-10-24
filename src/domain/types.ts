@@ -242,7 +242,7 @@ export interface FactAuditEvent {
     | "basics_updated"
     | "created"
     | "document_uploaded"
-    | "document_extracted"; // S3a (0007, D19)
+    | "document_extracted"; // S3a (0007, D21)
   fromVerification: VerificationState | null;
   toVerification: VerificationState | null;
   actorId: string;

@@ -113,7 +113,7 @@ describe("uploadProjectDocument (fixture storage)", () => {
       [{ kind: "contract" }, /kind/],
       [{ sourceUrl: "http://example.com/x" }, /sourceUrl/],
       [{ sourceId: "no-such-source" }, /Unknown source/],
-      // D19: a RERA certificate or a K-RERA (regulator) document needs the page it was downloaded from
+      // D21: a RERA certificate or a K-RERA (regulator) document needs the page it was downloaded from
       [{ kind: "rera_certificate", sourceUrl: "" }, /sourceUrl: required for K-RERA documents and RERA certificates/],
       [{ sourceId: "k-rera", sourceUrl: null }, /sourceUrl: required for K-RERA/],
       [{ title: "" }, /title/],

@@ -85,7 +85,7 @@ describe("resolveFactsCurrent (TS mirror of the facts_current view)", () => {
     expect(rows[0].conflicts.map((c) => c.fact_id)).toEqual(["builder", "est"]);
   });
 
-  it("D19: within a truth level K-RERA beats a newer builder value, then govt, builder, rest; all kept in conflicts", () => {
+  it("D21: within a truth level K-RERA beats a newer builder value, then govt, builder, rest; all kept in conflicts", () => {
     const rows = resolveFactsCurrent(
       [
         cand({ fact_id: "builder-new", value_date: "2028-03-31", source_type: "builder", observed_at: "2026-10-15T00:00:00Z", last_verified_at: "2026-10-15T00:00:00Z" }),

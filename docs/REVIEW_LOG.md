@@ -185,10 +185,18 @@ Verdict: **PASS** (N1–N4 fixed; no critical, high or medium findings). Low, no
 - N3: NEGATION also matches the apostrophe-stripped forms (`isn t`, `hasn t`, `wasn t`, …). Tests cover "isn't approved", "hasn't been approved" and "wasn't sanctioned", both in `stageFromText` and in the cited window.
 - N4: a year followed by a comma is accepted (`/^(\d|,\d)/` rejects only a digit or a thousands group). Tested with "expected by 2027, says BMRCL"; "20301" is still rejected.
 
-## S4a fix — stage phrase markers (2026-10-24), pending review
-Input: branch fix/developments-stage-phrase. Trigger: the first staging run (Hebbal, 2026-10-24) ended `no_results` / `drop_stage_not_cited`; candidates were not logged, so the likely causes are fixed conservatively. Gates: check 559 tests green, e2e area-developments green.
-- Negation/future markers are now tested only on the matched stage phrase plus the `STAGE_PREFIX_WORDS` (4) words before it, in both `stageFromText` and `stageAffirmedInWindows` (shared `matchStagePhrase` / `stagePhraseVoided`). "under construction and expected to be completed by 2027" now gives under_construction. "not approved", "yet to be approved", "isn't approved", "hasn't been approved" and "(is) expected to be / will be operational" still drop.
-- In the cited window, the words checked are the page words just before the matched phrase, even when that phrase sits inside a longer stageText.
-- New phrases: under_construction ("nearing completion", "works are/is in progress", "civil work(s) has/have begun/started", "construction work(s) underway/in progress/ongoing", "partially operational"); tendered ("work order issued/awarded"); approved ("in-principle approval", "cabinet nod/approval"). "Foundation stone" and "trial run(s)" deliberately map to no stage.
-- Prompt: stageText must be the shortest verbatim phrase from the page that states the current stage.
-- Reviewer to confirm: no fabrication path opened; a stage still needs a verbatim cited phrase, not negated or future-tense by the words just before it.
+## S4a fix — stage phrase markers — review round 1 (2026-10-24)
+Input: 4962a7c (fix/developments-stage-phrase). Trigger: the first staging run (Hebbal, 2026-10-24) ended `no_results` / `drop_stage_not_cited`. Candidates were not logged, so the likely causes were fixed conservatively: markers tested only on the matched stage phrase plus 4 words before it (shared `matchStagePhrase` / `stagePhraseVoided`), new stage phrases, and a prompt asking for the shortest verbatim stage phrase. Gates at 4962a7c: check 559, e2e area-developments green.
+Verdict: **CHANGES REQUIRED (F1–F4)**, all fixed in round 2:
+- F1 (regression): keeping only the last 4 words of stageText before the phrase missed earlier negation ("has not, as of October 2026, been approved" was accepted).
+- F2: "cabinet approval" and "in-principle approval" are nouns, not a stage ("BMRCL seeks cabinet approval").
+- F3: bare "nearing completion" overstated the stage ("its DPR is nearing completion").
+- F4: (a) "technical bids opened" mapped to operational; (b) bare "work(s) in progress" too broad ("work is in progress on the DPR"); (c) "DPR-approved" not matched.
+
+## S4a fix — stage phrase markers — review round 2 (2026-10-24), pending review
+Input: fix/developments-stage-phrase after round 1. Fixes:
+- F1: inside stageText, markers are tested on everything up to and including the matched phrase; after it, NEGATION only (not FUTURE), so "approved but has not been sanctioned funds" drops while "under construction and expected to be completed by 2027" is kept. The 4-word limit (`STAGE_PREFIX_WORDS`) now applies only to page words before stageText in the cited window. Tests cover the three reviewer examples in `stageFromText` and in the window path.
+- F2: approval nouns need a granting verb (`cabinet approved|cleared|gave (its) nod/approval`, `received|got|granted|accorded in-principle/cabinet approval`, `in-principle approval granted|given|received|accorded`). NEGATION also matches `seek(s)|sought|applied for|requested|submitted for`. "seeks cabinet approval" and "has applied for in-principle approval" are tested to drop.
+- F3: only `construction (is) nearing completion` / `nearing completion of construction`. "its DPR is nearing completion" is tested to drop.
+- F4: (a) `(bids|tenders) (were|was) opened` is checked before the operational line and maps to tendered; (b) bare work-in-progress forms removed, replaced by `(construction|civil) work(s) (is|are) underway/in progress/ongoing`; (c) the dpr regex accepts `dpr-approved`. Each tested in `stageFromText` and in the window path.
+- Known limit (unchanged by this fix): with a short stageText the window check reads only the 4 page words before it, so page negation further back ("has not, as of October 2026, been approved" quoted as just "approved") is not caught there.

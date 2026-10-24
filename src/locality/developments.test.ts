@@ -37,7 +37,7 @@ describe("infrastructure stages", () => {
   it.each([
     ["Under construction", "under_construction"],
     ["construction is underway", "under_construction"],
-    ["work in progress", "under_construction"],
+    ["civil work in progress", "under_construction"],
     ["DPR approved", "dpr_approved"],
     ["detailed project report has been approved", "dpr_approved"],
     ["tenders invited", "tendered"],
@@ -88,6 +88,22 @@ describe("infrastructure stages", () => {
     "work order yet to be issued",
     "awaiting in-principle approval",
     "awaiting cabinet nod",
+    // F1: negation earlier in stageText, or right after the phrase
+    "has not, as of October 2026, been approved",
+    "is not, according to the latest BMRCL update, under construction",
+    "approved but has not been sanctioned funds",
+    // F2: approval nouns without a granting verb
+    "BMRCL seeks cabinet approval",
+    "has applied for in-principle approval",
+    "cabinet approval",
+    "in-principle approval",
+    "sought cabinet approval and was approved",
+    // F3 / F4b: progress or completion of something other than construction
+    "its DPR is nearing completion",
+    "nearing completion",
+    "work is in progress on the DPR",
+    "works are in progress",
+    "work in progress",
   ])("a negated or future phrase states no tier: %j", (text) => {
     expect(stageFromText(text)).toBeNull();
   });
@@ -95,9 +111,9 @@ describe("infrastructure stages", () => {
   it.each([
     ["under construction and expected to be completed by 2027", "under_construction"],
     ["approved by the state cabinet; work will start in 2026", "approved"],
-    ["nearing completion", "under_construction"],
-    ["works are in progress", "under_construction"],
-    ["work is in progress", "under_construction"],
+    ["construction is nearing completion", "under_construction"],
+    ["nearing completion of construction", "under_construction"],
+    ["civil works are in progress", "under_construction"],
     ["civil works have begun", "under_construction"],
     ["civil work has started", "under_construction"],
     ["construction work underway", "under_construction"],
@@ -106,10 +122,15 @@ describe("infrastructure stages", () => {
     ["partially operational", "under_construction"],
     ["work order issued", "tendered"],
     ["work order awarded", "tendered"],
-    ["in-principle approval", "approved"],
-    ["in principle approval", "approved"],
-    ["cabinet nod", "approved"],
-    ["cabinet approval", "approved"],
+    ["technical bids opened last week", "tendered"],
+    ["tenders were opened", "tendered"],
+    ["DPR-approved", "dpr_approved"],
+    ["received in-principle approval", "approved"],
+    ["accorded in principle approval", "approved"],
+    ["in-principle approval granted", "approved"],
+    ["got cabinet approval", "approved"],
+    ["the state cabinet approved the project", "approved"],
+    ["cabinet gave its nod", "approved"],
   ] as const)("markers count only just before the phrase; new phrases: stageFromText(%j) = %j", (text, stage) => {
     expect(stageFromText(text)).toBe(stage);
   });
@@ -125,6 +146,7 @@ describe("infrastructure stages", () => {
       stage: "under_construction",
       phrase: "under construction",
       before: "the line is ",
+      after: " and expected to be completed by 2027",
     });
     expect(matchStagePhrase("coming soon")).toBeNull();
     expect(STAGE_PREFIX_WORDS).toBe(4);

@@ -166,14 +166,37 @@ describe("development validator (anti-fabrication)", () => {
 
   it("accepts the new unambiguous stage phrases from the page", () => {
     for (const [lead, stageText, stage] of [
-      ["is", "nearing completion", "under_construction"],
+      ["where", "construction is nearing completion", "under_construction"],
       ["has a", "work order issued", "tendered"],
-      ["has", "in-principle approval", "approved"],
+      ["has", "received in-principle approval", "approved"],
       ["is", "partially operational", "under_construction"],
+      ["is", "DPR-approved", "dpr_approved"],
+      ["saw", "technical bids opened last week", "tendered"],
     ] as const) {
       const cited = `SAMPLE Alpha Metro Line serving ${LOC.name} ${lead} ${stageText}. Fictional.`;
       const r = validate([{ ...good, stageText, expectedCompletion: null, authority: null }], evidence([{ url: URL_A, citedText: cited }]));
       expect(r.accepted[0], stageText).toMatchObject({ stage });
+    }
+    // dpr-approved on the page, quoted without the hyphen (words() treats both alike)
+    const hyphen = `SAMPLE Alpha Metro Line serving ${LOC.name} is DPR-approved. Fictional.`;
+    expect(validate([{ ...good, stageText: "DPR approved", expectedCompletion: null, authority: null }], evidence([{ url: URL_A, citedText: hyphen }])).accepted[0]).toMatchObject({
+      stage: "dpr_approved",
+    });
+  });
+
+  it("drops stage text negated anywhere before the phrase or right after it, and approval nouns without a granting verb", () => {
+    for (const stageText of [
+      "has not, as of October 2026, been approved",
+      "is not, according to the latest BMRCL update, under construction",
+      "approved but has not been sanctioned funds",
+      "seeks cabinet approval",
+      "has applied for in-principle approval",
+      "its DPR is nearing completion",
+      "work is in progress on the DPR",
+    ]) {
+      const cited = `SAMPLE Alpha Metro Line serving ${LOC.name} ${stageText}. Fictional.`;
+      const r = validate([{ ...good, stageText, expectedCompletion: null, authority: null }], evidence([{ url: URL_A, citedText: cited }]));
+      expect(r.dropped, stageText).toEqual({ stage_not_cited: 1 });
     }
   });
 

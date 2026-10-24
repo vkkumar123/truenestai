@@ -148,9 +148,9 @@ export function developmentNameKey(name: string): string {
 /**
  * True when at least one cited occurrence of the stage phrase is not negated or future-tense by
  * the few words before it ("has not been approved", "yet to be tendered", "will be operational").
- * The phrase that states the tier is derived from stageText exactly as stageFromText does, and the
- * words checked are the STAGE_PREFIX_WORDS page words just before that phrase (which may come from
- * stageText itself when the phrase sits at the end of a longer stageText).
+ * The phrase that states the tier is derived from stageText exactly as stageFromText does. All of
+ * stageText up to that phrase is checked (negation also after it), plus the STAGE_PREFIX_WORDS
+ * page words just before stageText in the window.
  */
 export function stageAffirmedInWindows(stageText: string, stage: InfrastructureStage, windows: readonly string[]): boolean {
   const phrase = words(stageText);
@@ -159,7 +159,7 @@ export function stageAffirmedInWindows(stageText: string, stage: InfrastructureS
   for (const w of windows) {
     const text = words(w);
     for (let at = text.indexOf(phrase); at >= 0; at = text.indexOf(phrase, at + 1)) {
-      if (!stagePhraseVoided(`${text.slice(0, at)} ${m.before}`, m.phrase, stage)) return true;
+      if (!stagePhraseVoided(m, text.slice(0, at))) return true;
     }
   }
   return false;
@@ -247,9 +247,8 @@ export function validateDevelopmentCandidates(
 
     // Stage: the cited phrase decides the tier (constitution §5: no tier, no row). A negated or
     // future phrase ("has not been approved", "will be opened") states no tier, on its own or in
-    // the words just before it on the page. Only the phrase that states the tier and the
-    // STAGE_PREFIX_WORDS words before it are checked, so "under construction and expected to be
-    // completed by 2027" keeps under_construction.
+    // the words just before it on the page. Future wording after the stage phrase is ignored, so
+    // "under construction and expected to be completed by 2027" keeps under_construction.
     const stage = c.stageText && inWindow(c.stageText) ? stageFromText(c.stageText) : null;
     if (!stage || !c.stageText || !stageAffirmedInWindows(c.stageText, stage, wins)) return inc(dropped, "stage_not_cited");
 

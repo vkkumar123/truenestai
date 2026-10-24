@@ -11,6 +11,8 @@ export interface Citation {
 export interface ResearchEvidence {
   /** URLs present in web_search_tool_result blocks of this response. */
   searchResultUrls: string[];
+  /** Page titles the search tool returned, by URL exactly as returned (tool output, not model text). */
+  searchResultTitles?: Record<string, string>;
   /** web_search_result_location citations attached to text blocks of this response. */
   citations: Citation[];
   /** All text blocks joined in order (the model's prose + its JSON answer). */
@@ -23,6 +25,7 @@ export interface ResearchEvidence {
 
 export function extractEvidence(content: readonly ResearchContentBlock[]): ResearchEvidence {
   const urls = new Set<string>();
+  const titles: Record<string, string> = {};
   const citations: Citation[] = [];
   const texts: string[] = [];
   let searchErrors = 0;
@@ -34,7 +37,10 @@ export function extractEvidence(content: readonly ResearchContentBlock[]): Resea
       searchResultBlocks++;
       // Success content is a list of results; an error is a single object.
       if (Array.isArray(block.content)) {
-        for (const r of block.content) if (r.type === "web_search_result" && typeof r.url === "string") urls.add(r.url);
+        for (const r of block.content) if (r.type === "web_search_result" && typeof r.url === "string") {
+          urls.add(r.url);
+          if (typeof r.title === "string" && r.title.trim() && !titles[r.url]) titles[r.url] = r.title;
+        }
       } else {
         searchErrors++;
       }
@@ -47,7 +53,7 @@ export function extractEvidence(content: readonly ResearchContentBlock[]): Resea
       }
     }
   }
-  return { searchResultUrls: [...urls], citations, text: texts.join(""), searchErrors, searchResultBlocks };
+  return { searchResultUrls: [...urls], searchResultTitles: titles, citations, text: texts.join(""), searchErrors, searchResultBlocks };
 }
 
 export class CandidateParseError extends Error {

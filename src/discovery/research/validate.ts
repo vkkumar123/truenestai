@@ -1,11 +1,14 @@
 // Anti-fabrication validator for web research candidates.
 //
-// Rule: a field survives only if its value appears in text that the API itself cited for the
-// candidate's URL, and that URL appeared in this response's web search results. The model's own
-// "quote" is never trusted as evidence. Each fact must also sit in the same citation as the
-// candidate's name, within FACT_WINDOW characters of it. A candidate needs an https URL off the blocked
-// portal list, a cited name, and a locality that maps to exactly one active configured locality
-// (src/config/markets alias matching) and is itself cited. Anything else is dropped and counted.
+// Rule: a field survives only if its value appears in text that the API itself returned for the
+// candidate's URL (citations, or the page title the search tool returned), and that URL appeared
+// in this response's web search results. The model's own "quote" is never trusted as evidence.
+// The name must be in a citation or the page title. Facts (developer, address, price, RERA) must
+// sit in a citation within FACT_WINDOW characters of the name; when the name is only in the page
+// title (the page is about that project), any citation of that page may carry the developer and
+// address, but RERA numbers and price still need the name's window, so they are dropped. The locality must map
+// to exactly one active configured locality (src/config/markets alias matching) and appear in that
+// page's citations or title. Anything else is dropped and counted.
 import { z } from "zod";
 import { findLocalitiesByText, isActiveLocality, type Locality } from "@/config/markets";
 import { MAX_PRICE_TEXT, MAX_SHORT, MAX_TITLE, safeHttpsUrl, type RawExternalRecord } from "../adapter";
@@ -66,7 +69,8 @@ const candidateSchema = z.object({
 
 /** Lower-case letters/digits (any script) separated by single spaces, padded for whole-word checks. */
 function words(s: string): string {
-  return ` ${s.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim()} `;
+  // "&" and "and" are the same word in project names ("Sun & Sanctum" / "Sun and Sanctum").
+  return ` ${s.normalize("NFKC").toLowerCase().replace(/&/g, " and ").replace(/[^\p{L}\p{N}]+/gu, " ").trim()} `;
 }
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -129,9 +133,10 @@ export function reraTokens(text: string): string[] {
 
 /** Slices of `cited` within FACT_WINDOW characters of each whole-word occurrence of `name`. */
 export function nameWindows(name: string, cited: string): string[] {
-  const parts = canon(name).match(/[\p{L}\p{N}]+/gu);
+  const amp = (x: string) => canon(x).replace(/&/g, " and ");
+  const parts = amp(name).match(/[\p{L}\p{N}]+/gu);
   if (!parts?.length) return [];
-  const text = canon(cited);
+  const text = amp(cited);
   const re = new RegExp(`(?<![\\p{L}\\p{N}])${parts.map(escapeRe).join("[^\\p{L}\\p{N}]+")}(?![\\p{L}\\p{N}])`, "gu");
   const out: string[] = [];
   for (const m of text.matchAll(re)) {
@@ -179,6 +184,11 @@ export function validateCandidates(candidates: readonly unknown[], evidence: Res
     const k = normaliseUrl(u);
     if (!resultUrls.has(k)) resultUrls.set(k, u);
   }
+  const titleByUrl = new Map<string, string>();
+  for (const [u, t] of Object.entries(evidence.searchResultTitles ?? {})) {
+    const k = normaliseUrl(u);
+    if (!titleByUrl.has(k)) titleByUrl.set(k, t);
+  }
   const citedByUrl = new Map<string, string[]>();
   for (const c of evidence.citations as Citation[]) {
     const key = normaliseUrl(c.url);
@@ -204,15 +214,28 @@ export function validateCandidates(candidates: readonly unknown[], evidence: Res
     if (!url) return inc(dropped, "url_not_https");
     if (isBlockedPortalUrl(url)) return inc(dropped, "portal_host");
     const cited = citedByUrl.get(urlKey) ?? [];
-    if (!cited.length) return inc(dropped, "no_citation");
+    const title = titleByUrl.get(urlKey) ?? "";
+    if (!cited.length && !title) return inc(dropped, "no_citation");
     // A page whose citations name several registrations is a multi-project page: facts on it
     // cannot be attributed to one project safely.
     if (new Set(cited.flatMap(reraTokens)).size > 1) return inc(dropped, "multiple_projects");
 
     // Every fact must sit in the same citation as the name, within FACT_WINDOW characters of it.
-    const windows = cited.flatMap((t) => nameWindows(c.name, t));
-    if (!windows.length) return inc(dropped, "name_not_cited");
-    const isCited = (check: (v: string, t: string) => boolean, v: string) => windows.some((w) => check(v, w));
+    // A page whose returned title names the project is about that project (title-only mode below).
+    const nameWins = cited.flatMap((t) => nameWindows(c.name, t));
+    // Title-only mode needs a specific name: at least two words, and not the developer's own name
+    // (a developer page titled "Acme Developers" says nothing about one project).
+    const titleOnly =
+      !nameWins.length &&
+      !!title &&
+      citedPhrase(c.name, title) &&
+      words(c.name).trim().split(" ").length >= 2 &&
+      !(c.developerName && citedPhrase(c.name, c.developerName));
+    if (!nameWins.length && !titleOnly) return inc(dropped, "name_not_cited");
+    // Developer and address may come from any citation of a page titled with the project; RERA
+    // numbers and price always need the name's own window (a page can quote another project's).
+    const pageWins = titleOnly ? cited : nameWins;
+    const isCited = (check: (v: string, t: string) => boolean, v: string, wins = pageWins) => wins.some((w) => check(v, w));
 
     // Locality from the stated locality first, then the address.
     let loc = matchLocality(c.localityText);
@@ -220,21 +243,23 @@ export function validateCandidates(candidates: readonly unknown[], evidence: Res
     if (loc === "none") return inc(dropped, "out_of_market");
     if (loc === "ambiguous") return inc(dropped, "ambiguous_locality");
     const { locality } = loc;
-    if (!localityTerms(locality).some((t) => isCited(citedPhrase, t))) return inc(dropped, "locality_not_cited");
+    // The locality is a page-level fact: anywhere in this page's citations or its returned title.
+    const pageText = [title, ...cited];
+    if (!localityTerms(locality).some((t) => pageText.some((x) => citedPhrase(t, x)))) return inc(dropped, "locality_not_cited");
 
-    const keep = (field: FieldName, v: string | null, check: (v: string, t: string) => boolean): string | null => {
+    const keep = (field: FieldName, v: string | null, check: (v: string, t: string) => boolean, wins = pageWins): string | null => {
       if (!v) return null;
-      if (isCited(check, v)) return v;
+      if (isCited(check, v, wins)) return v;
       inc(fieldsDropped, field);
       return null;
     };
     const developerName = keep("developerName", c.developerName, citedPhrase);
     const address = keep("address", c.address, citedPhrase);
-    const priceText = keep("priceText", c.priceText, citedPrice);
+    const priceText = keep("priceText", c.priceText, citedPrice, nameWins);
     const reraNumbers: string[] = [];
     for (const r of c.reraNumbers) {
       const v = r.trim();
-      if (v && isCited(citedRera, v)) {
+      if (v && isCited(citedRera, v, nameWins)) {
         if (!reraNumbers.some((x) => normaliseRera(x) === normaliseRera(v))) reraNumbers.push(v);
       } else inc(fieldsDropped, "reraNumbers");
     }

@@ -108,3 +108,14 @@ Verdict: **PASS**. All round-1 findings verified fixed. Follow-ups closed in the
 - Curated truth is derived at read time in `facts_current` and `facts_history` (stored value is a fallback only; H2 guard unchanged).
 - CHECK: a web research source always writes `source_type = 'search'`.
 - `facts.verification` changes only inside `research_set_verification` / `research_set_fact` (`tn.via_rpc` flag, redefined in 0006 with otherwise identical bodies); a direct UPDATE is refused. The flag is a guard against accidental writes, not a security boundary.
+## M2.5 staging fix — review round 1 (2026-10-23)
+Input: 57416fb (filtered-search hint, request-time sample banner, title-backed citations, no-results diagnosis); check 391, build, e2e 51.
+Verdict: **CHANGES REQUIRED** (1 high).
+- H1: a title-only name match let any citation on the page supply the RERA number and price, so another project's registration could be attached.
+
+## M2.5 staging fix — review round 2 (2026-10-23)
+Input: 1d47343; check 393, research e2e 15.
+Verdict: **PASS**. H1 fixed: in title-only mode RERA and price need the name window (always dropped), and the name must have 2+ words and not be the developer name.
+Low, open/accepted:
+- L1: the developer-name guard relies on the model's developerName; a developer-style title can still pass as an unverified listing without RERA or price. Optional hardening later.
+- L2: fixed — stale comment above the title-only check.

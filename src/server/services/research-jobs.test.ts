@@ -45,6 +45,12 @@ describe("requestResearchOnMiss: enqueue dedupe and TTL", () => {
     expect(await repos.researchJobs.listRecent(10)).toHaveLength(1);
   });
 
+  it("noResultsCode names the cause of an empty run", () => {
+    expect(svc.noResultsCode({ received: 0, accepted: 0, dropped: {} })).toBe("no_candidates");
+    expect(svc.noResultsCode({ received: 3, accepted: 0, dropped: { name_not_cited: 1, locality_not_cited: 2 } })).toBe("drop_locality_not_cited");
+    expect(svc.noResultsCode({ received: 1, accepted: 1, dropped: {} })).toBe("not_stored");
+  });
+
   it("reuses a no_results job within RESEARCH_CACHE_HOURS and re-queues after it expires", async () => {
     let now = new Date("2026-10-22T00:00:00Z");
     const repos = setup({ clock: () => now });
@@ -52,7 +58,8 @@ describe("requestResearchOnMiss: enqueue dedupe and TTL", () => {
     const deps = { repos, env: "test" as const, limiter: limiter(), processEnv: pe };
     await svc.requestResearchOnMiss({ queryText: "nothing here at all", clientKey: "1.1.1.1", userAgent: UA }, deps);
     const run = await svc.runResearchBatch({ repos, env: "test", client: new FakeResearchClient(), now: () => now });
-    expect(run.outcomes).toEqual([expect.objectContaining({ status: "no_results", resultCount: 0 })]);
+    expect(run.outcomes).toEqual([expect.objectContaining({ status: "no_results", resultCount: 0, errorCode: "no_candidates" })]);
+    expect((await repos.researchJobs.listRecent(1))[0].errorCode).toBe("no_candidates");
 
     now = new Date("2026-10-22T23:00:00Z");
     expect(await svc.requestResearchOnMiss({ queryText: "nothing here at all", clientKey: "1.1.1.1", userAgent: UA }, deps)).toMatchObject({

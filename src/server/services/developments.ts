@@ -39,7 +39,7 @@ import {
 } from "../repositories";
 import { RESEARCH_MAX_JOBS_PER_REQUESTER_PER_DAY, requesterHash, researchSourceFor, researchWorkerConfigured } from "./research-jobs";
 
-// Planned area developments (S4a, D20). Staff functions call requireStaff() first; researched rows
+// Planned area developments (S4a, D22). Staff functions call requireStaff() first; researched rows
 // are unverified drafts that only staff may publish. Public reads return published rows only.
 // Logs carry ids, codes and counts only.
 

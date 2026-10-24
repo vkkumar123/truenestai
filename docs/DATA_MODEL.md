@@ -298,7 +298,7 @@ view's rules). Tests: `tests/db/fact-store.test.ts`, `src/server/repositories/fa
   spec project columns in S1b, and unit price/area to `cost_sheets` (S5a).
 - Locality observations have no `is_sample` cross-check (localities carry no such flag).
 
-## Area developments (S4a, `0008_developments.sql`, D20 proposed)
+## Area developments (S4a, `0008_developments.sql`, D22 proposed)
 Spec 06 developments are added to the existing `infrastructure_items`. The migration is additive, and the legacy
 columns `declared_completion` and `sources` stay as trigger-maintained mirrors for S4a rows.
 

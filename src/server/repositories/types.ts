@@ -307,7 +307,7 @@ export interface FactStoreRepository {
   getCurrent(entityType: FactEntityType, entityId: string, attribute: string): Promise<CurrentFact | null>;
 }
 
-// ---- S4a: planned area developments (0008_developments.sql, D20) ----
+// ---- S4a: planned area developments (0008_developments.sql, D22) ----
 
 export type DevelopmentReviewStatus = "pending" | "published" | "rejected";
 

@@ -1,4 +1,4 @@
-// Locality-level research of planned infrastructure (S4a, D20). Same evidence rules as the
+// Locality-level research of planned infrastructure (S4a, D22). Same evidence rules as the
 // listing validator (./validate.ts): a value survives only when it appears verbatim in text the
 // API cited for a URL that appeared in this response's web search results, in the same citation
 // as the development's name and within FACT_WINDOW characters of it. The model's JSON is only a

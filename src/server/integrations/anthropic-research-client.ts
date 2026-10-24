@@ -36,7 +36,7 @@ export const RESEARCH_REQUEST_TIMEOUT_MS = 110_000;
  * - No SDK retries (the job retries at most once); refusals fall back server-side.
  * Never logs the key, prompt or response text.
  * The same call loop serves buyer-search research (research) and locality development research
- * (researchDevelopments, S4a/D20); only the prompts differ.
+ * (researchDevelopments, S4a/D22); only the prompts differ.
  */
 export class AnthropicResearchClient implements ResearchClient, DevelopmentResearchClient {
   readonly kind = "anthropic" as const;

@@ -69,8 +69,8 @@ Plan: `/mnt/project-files/truenest/specs-alignment-plan.md` §6. DB/server only,
 - [ ] Fury: C6/C7 decisions; staging then production apply.
 - [ ] Re-map M4–M8 onto spec slices S2–S10 (plan §4), once Fury answers the conflict register (D17).
 
-## S4a — Area developments (next 5–10 years) — **code done 2026-10-24**; review and Fury's D20 confirmation pending
-Owner requirement (2026-10-24): show buyers development plans for the next 5–10 years around a project. D20 (proposed).
+## S4a — Area developments (next 5–10 years) — **code done 2026-10-24**; review and Fury's D22 confirmation pending
+Owner requirement (2026-10-24): show buyers development plans for the next 5–10 years around a project. D22 (proposed).
 - [x] `0008_developments.sql` (additive): spec 06 columns on `infrastructure_items`, seven stage tiers, the `developments` view, an append-only `infrastructure_completion_history`, an append-only review audit, RPCs with version checks, column-level anon grants on published rows only, and `research_jobs.kind`.
 - [x] Locality research on the existing queue and worker (`area_developments`, key `dev:<locality>`) under the existing caps. The citation validator requires name, stage, authority and expected date verbatim in the same citation. Rows are always unverified.
 - [x] `/admin/developments`: per-locality "Research area developments"; review list with edit, publish (admin), unpublish, reject and restore, plus pending research changes and audit history; manual entry with a required authority URL.
@@ -79,7 +79,7 @@ Owner requirement (2026-10-24): show buyers development plans for the next 5–1
 - [x] Quality review round 1 (fd95768): CHANGES REQUIRED; all findings addressed (REVIEW_LOG).
 - [x] Quality review round 2 (cb23796): PASS with N1–N4; fixed in round 3 (REVIEW_LOG).
 - [ ] Quality review round 3 logged in `REVIEW_LOG.md` (pending re-review).
-- [ ] Fury: confirm D20 and DATA_SOURCE_POLICY §11.3; staging then production apply of 0008.
+- [ ] Fury: confirm D22 and DATA_SOURCE_POLICY §11.3; staging then production apply of 0008.
 - [ ] Later: PostGIS geometry, a locality page listing, and a scheduled monitoring worker (M6).
 
 ## M4 — First approved external source adapter — **owner: R5**

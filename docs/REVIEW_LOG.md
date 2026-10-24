@@ -152,7 +152,7 @@ Verdict: **PASS with 4 medium findings (N1–N4)**, fixed in round 3:
 Changes in cb23796, for each round-1 finding:
 - H1: negation/future markers void a stage, both in the phrase and in the four cited words before it (future intent still counts as `proposed`). Tests cover the reviewer's examples.
 - H2: `development_store_research` rewritten as explicit branches. On a contradiction it sets `pending_change` and writes it into the audit note, and does not refresh `last_checked_at`. A match refreshes it. Publish and staff edits record the pending change they cleared. Covered by a DB test (publish "proposed 2028", research "shelved 2031") and a fixture mirror test.
-- H3: registry field `development_fields`, granted to `sample-web-research` and to `anthropic-web-search` on Fury's 2026-10-24 request (D20). Required at enqueue, in the worker job and in `researchLocalityDevelopments`. Refusal tested.
+- H3: registry field `development_fields`, granted to `sample-web-research` and to `anthropic-web-search` on Fury's 2026-10-24 request (D22). Required at enqueue, in the worker job and in `researchLocalityDevelopments`. Refusal tested.
 - M1: the locality must be in the name's citation windows. Tested.
 - M2: `staff_edited_at` (set by `development_update`). A staff-edited draft is treated as reviewed. Mirrored in the fixture. DB and unit tests.
 - M3: the guard rejects S4a inserts with `published = true` and any unpublished-to-published change outside `tn.via_rpc`. DB tests.

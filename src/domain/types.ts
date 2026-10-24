@@ -74,7 +74,7 @@ export type ConstructionStatus =
   | "unknown";
 
 /**
- * Infrastructure tier (constitution §5, C19, D20). `approved` is kept (in-principle approval or
+ * Infrastructure tier (constitution §5, C19, D22). `approved` is kept (in-principle approval or
  * sanction before a DPR); `dpr_approved` and `shelved` were added by S4a.
  */
 export type InfrastructureStage =
@@ -202,7 +202,7 @@ export interface InfrastructureItem {
   isSample: boolean;
 }
 
-// ---- S4a: planned area developments (D20) ----
+// ---- S4a: planned area developments (D22) ----
 
 /** One declared expected-completion value, as seen on a source on a date (append-only history). */
 export interface DeclaredCompletionRevision {

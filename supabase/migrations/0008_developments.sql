@@ -1,4 +1,4 @@
--- S4a: planned area developments (spec 06, constitution §5, C15, C19, D20). Additive only.
+-- S4a: planned area developments (spec 06, constitution §5, C15, C19, D22). Additive only.
 -- Plan: /mnt/project-files/truenest/specs-alignment-plan.md §4 S4a and §5 (developments row).
 -- (0007 is reserved by another branch; this file is numbered 0008 on purpose.)
 --

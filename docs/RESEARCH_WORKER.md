@@ -68,7 +68,7 @@ The request uses the basic `web_search_20250305` tool (no dynamic filtering), so
 - **Logs** contain job ids, statuses, counts and token usage only. They never contain the API key, the prompt, response text, query text or IPs. Staff see the query text on `/admin/research-jobs` (admin and advisor, read-only).
 - **Error codes** (`research_jobs.error_code`): `timeout`, `rate_limited`, `api_error`, `auth`, `bad_request`, `refusal`, `max_tokens`, `parse_error`, `no_evidence` (candidates with no search result blocks), `store_failed`, `unknown`, `stalled` (still queued after 30 minutes, which usually means the worker is not scheduled; the failure is cached for 6 hours), and `abandoned` (still running after 15 minutes on its second attempt).
 
-## Area development jobs (S4a, D20)
+## Area development jobs (S4a, D22)
 - **Start.** Staff use "Research area developments" on `/admin/developments?locality=<id>`. This calls `requestAreaDevelopmentResearch` and then `research_enqueue(..., p_kind => 'area_developments')`. The key is `dev:<localityId>`, which never collides with a search-miss key (`queryKey()` output has no colon).
 - **Limits.** The same cache window, 6-hour failure cooldown and global `RESEARCH_MAX_JOBS_PER_DAY` apply. The per-requester cap is keyed by an HMAC of the staff user id. Automated actors cannot start research. Buyers cannot trigger it.
 - **Worker.** `runResearchBatch` sends `area_developments` jobs to `runAreaDevelopmentJob`, under the same deadline, retry and finish rules. The prompt (`src/discovery/research/developments.ts`) asks for infrastructure within about 5 km over the next 5–10 years, with verbatim facts and no comment on prices or returns. The localities named in it come from `src/config/markets/`.

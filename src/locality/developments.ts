@@ -1,4 +1,4 @@
-// Pure helpers for planned area developments (S4a, D20): infrastructure tiers, declared
+// Pure helpers for planned area developments (S4a, D22): infrastructure tiers, declared
 // completion dates, slip history and straight-line distance. No I/O.
 //
 // Rules: a declared date is the source's claim, never a TrueNest prediction; a slip is computed

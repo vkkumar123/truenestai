@@ -289,7 +289,15 @@ export interface FactAuditEvent {
   id: string;
   projectId: string;
   field: ResearchFactField | "published" | "basics" | "documents";
-  action: "fact_set" | "verification_changed" | "published" | "unpublished" | "basics_updated" | "created" | "document_uploaded";
+  action:
+    | "fact_set"
+    | "verification_changed"
+    | "published"
+    | "unpublished"
+    | "basics_updated"
+    | "created"
+    | "document_uploaded"
+    | "document_extracted"; // S3a (0007, D21)
   fromVerification: VerificationState | null;
   toVerification: VerificationState | null;
   actorId: string;

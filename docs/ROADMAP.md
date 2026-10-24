@@ -69,6 +69,15 @@ Plan: `/mnt/project-files/truenest/specs-alignment-plan.md` §6. DB/server only,
 - [ ] Fury: C6/C7 decisions; staging then production apply.
 - [ ] Re-map M4–M8 onto spec slices S2–S10 (plan §4), once Fury answers the conflict register (D17).
 
+## S3a — K-RERA document extraction (D21) — **built 2026-10-24 on `feat/04-rera-document-extraction`**; review and staging apply pending
+Owner decision: staff upload K-RERA documents they downloaded by hand; AI extracts the details with page references for staff review; no automated K-RERA access. Details: `DOCUMENT_EXTRACTION.md`.
+- [x] `0007_document_extraction.sql` (additive): `document_extractions` (audited, RLS on, service role only), `fact_observations.document_id` + `page_number`, a document instead of a source URL for uploaded documents, all 0006 guarantees kept; `facts_current` precedence K-RERA > govt > builder > others (owner, D21).
+- [x] Server-only extraction service: Claude with citations; a value is kept only when verbatim in its citation's text, with that page; drops counted; no personal data stored; unverified official `rera` observations with excerpt ≤ 20 words; 120 s timeout, 15 MB / 100-page caps; images and non-PDFs unsupported; idempotent per document version; network-free fake client in fixture mode.
+- [x] Admin: "Extract details" (staff only, audited), results table (attribute, value, page, excerpt, "Unverified — needs review", conflict), empty / error / unsupported states, limitation text; promotion of `address` / `rera_numbers` only through the existing audited edit (saved unverified). No public page changes.
+- [x] Tests: validator and service unit tests, `test:db` for 0007, Playwright upload → extract → review journey.
+- [ ] Quality-reviewer pass logged in `REVIEW_LOG.md`.
+- [ ] Fury: apply 0006 + 0007 to staging, set `ANTHROPIC_API_KEY` (R3, R14); validate on one real K-RERA certificate.
+
 ## S4a — Area developments (next 5–10 years) — **code done 2026-10-24**; review and Fury's D22 confirmation pending
 Owner requirement (2026-10-24): show buyers development plans for the next 5–10 years around a project. D22 (proposed).
 - [x] `0008_developments.sql` (additive): spec 06 columns on `infrastructure_items`, seven stage tiers, the `developments` view, an append-only `infrastructure_completion_history`, an append-only review audit, RPCs with version checks, column-level anon grants on published rows only, and `research_jobs.kind`.
@@ -78,7 +87,7 @@ Owner requirement (2026-10-24): show buyers development plans for the next 5–1
 - [x] Tests: unit (validator, stages, dates, slips, distance, service roles and readiness parity); `test:db` (constraints, RLS, append-only history, upsert vs pending change, RPC conflicts); e2e `area-developments.spec.ts` (fixture mode, SAMPLE on example.org).
 - [x] Quality review round 1 (fd95768): CHANGES REQUIRED; all findings addressed (REVIEW_LOG).
 - [x] Quality review round 2 (cb23796): PASS with N1–N4; fixed in round 3 (REVIEW_LOG).
-- [ ] Quality review round 3 logged in `REVIEW_LOG.md` (pending re-review).
+- [x] Quality review round 3 (4f1f431): PASS (REVIEW_LOG).
 - [ ] Fury: confirm D22 and DATA_SOURCE_POLICY §11.3; staging then production apply of 0008.
 - [ ] Later: PostGIS geometry, a locality page listing, and a scheduled monitoring worker (M6).
 
@@ -93,7 +102,7 @@ Owner requirement (2026-10-24): show buyers development plans for the next 5–1
 - [ ] Manual-assisted: staff record registration/complaint/order with URL, observed date, as-printed reference.
 - [ ] Display copy: registration ≠ title; complaints shown factually with source.
 - [ ] Automated lookup only after permitted access is documented; otherwise feature-flagged off.
-- [ ] Optional: Python worker parses certificates → AI-extracted draft → reviewer.
+- [x] Certificates → AI-extracted draft → reviewer: done as S3a (staff upload + extraction, D21); no Python worker needed.
 
 ## M6 — Locality infrastructure, amenities, maps — **owner: R4**
 - [ ] Infrastructure items with stage + sources; declared completion never presented as a promise.

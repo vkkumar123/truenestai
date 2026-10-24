@@ -50,6 +50,17 @@ export type ResearchActionState =
 export const AUTO_UNPUBLISHED_MESSAGE =
   "The project no longer passes publish checks and was unpublished until an admin re-verifies it.";
 
+/** K-RERA document extraction (extractDocumentAction). Initial state: `{ status: "idle" }`. */
+export type ExtractDocumentActionState =
+  | { status: "idle" }
+  | {
+      status: "success" | "error";
+      message: string;
+      outcome?: "succeeded" | "failed" | "unsupported" | "already_done" | "in_progress";
+      errorCode?: string | null;
+      unauthenticated?: boolean;
+    };
+
 /** On-demand web research trigger (startWebResearchAction). Initial state: `{ status: "idle" }`. */
 export type WebResearchActionState =
   | { status: "idle" }

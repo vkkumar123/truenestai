@@ -9,7 +9,7 @@ vi.mock("next/headers", () => ({
 const { uploadProjectDocument, getDocumentDownload } = await import("./documents");
 const { createFixtureRepositories } = await import("../repositories/fixture");
 const { StaffAuthError } = await import("../auth");
-const { documentStoragePath, safeFileName, sniffContentType, MAX_DOCUMENT_BYTES } = await import("../storage/documents");
+const { documentStoragePath, safeFileName, sniffContentType, MAX_DOCUMENT_BYTES, SupabaseDocumentStorage } = await import("../storage/documents");
 
 const admin = async () => ({ userId: "staff-1", role: "admin" as const, mode: "fixture" as const, expiresAt: null });
 const advisor = async () => ({ userId: "staff-2", role: "advisor" as const, mode: "fixture" as const, expiresAt: null });
@@ -39,6 +39,24 @@ describe("document storage helpers", () => {
     expect(sniffContentType(PNG)).toBe("image/png");
     expect(sniffContentType(new Uint8Array([0xff, 0xd8, 0xff, 0xe0]))).toBe("image/jpeg");
     expect(sniffContentType(HTML)).toBeNull();
+  });
+
+  it("Supabase read() returns the bytes of a non-sniffable object with contentType null; a missing object is null", async () => {
+    const objects: Record<string, Uint8Array> = { "p/k/v1/a.pdf": PDF, "p/k/v1/b.pdf": HTML };
+    const db = {
+      storage: {
+        from: () => ({
+          download: async (path: string) =>
+            objects[path]
+              ? { data: new Blob([objects[path] as BlobPart]), error: null }
+              : { data: null, error: Object.assign(new Error("Object not found"), { statusCode: "404" }) },
+        }),
+      },
+    };
+    const storage = new SupabaseDocumentStorage(() => db as never);
+    expect(await storage.read("p/k/v1/a.pdf")).toEqual({ bytes: PDF, contentType: "application/pdf" });
+    expect(await storage.read("p/k/v1/b.pdf")).toEqual({ bytes: HTML, contentType: null });
+    expect(await storage.read("p/k/v1/missing.pdf")).toBeNull();
   });
 
   it("builds safe, versioned paths", () => {
@@ -95,6 +113,9 @@ describe("uploadProjectDocument (fixture storage)", () => {
       [{ kind: "contract" }, /kind/],
       [{ sourceUrl: "http://example.com/x" }, /sourceUrl/],
       [{ sourceId: "no-such-source" }, /Unknown source/],
+      // D21: a RERA certificate or a K-RERA (regulator) document needs the page it was downloaded from
+      [{ kind: "rera_certificate", sourceUrl: "" }, /sourceUrl: required for K-RERA documents and RERA certificates/],
+      [{ sourceId: "k-rera", sourceUrl: null }, /sourceUrl: required for K-RERA/],
       [{ title: "" }, /title/],
     ];
     for (const [i, [over, re]] of cases.entries()) {

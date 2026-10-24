@@ -35,9 +35,9 @@ d("migration runner + seed", () => {
 
   it("applies every migration once, with a ledger, then the seed", async () => {
     const r = await migrate(c, { migrationsDir: MIGRATIONS, seedFiles: [SEED], sampleSeed: true });
-    // Every file in supabase/migrations, in order (0007 is reserved by another branch).
+    // Every file in supabase/migrations, in order.
     const all = migrationFiles().map((f) => path.basename(f));
-    expect(all.slice(0, 6)).toEqual(["0001_core.sql", "0002_research_audit.sql", "0003_m2_live.sql", "0004_m2_review.sql", "0005_research_jobs.sql", "0006_fact_store.sql"]);
+    expect(all.slice(0, 7)).toEqual(["0001_core.sql", "0002_research_audit.sql", "0003_m2_live.sql", "0004_m2_review.sql", "0005_research_jobs.sql", "0006_fact_store.sql", "0007_document_extraction.sql"]);
     expect(all).toContain("0008_developments.sql");
     expect(r.applied).toEqual(all);
     expect(r.seeded).toEqual(["seed.sql"]);

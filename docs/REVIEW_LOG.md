@@ -125,6 +125,20 @@ Input: 98ff691 (basic web_search_20250305, prompt tweak, refined no_candidates_*
 Verdict: **PASS**. Validator untouched; prompt still forbids guessing; counts-only logs; codes fit the CHECK.
 - L1: fixed — docs/comment now call dynamic filtering the suspected (not confirmed) cause.
 
+## S3a K-RERA extraction — review round 1 (2026-10-24)
+Input: 20ac74b (0007, extraction service, admin UI, tests, D21 precedence); check 433, test:db 90, build, e2e 53.
+Verdict: **CHANGES REQUIRED** (1 high, 2 medium, 4 low). All addressed in the follow-up change on the same branch.
+- H1: the verbatim check matched substrings ("2" in "112/2", "registered" in "unregistered", "40" in "240"). Fixed: `findVerbatim` matches whole tokens (no adjacent letter/digit, no joiner `/ . , -` into one); the excerpt is taken at the match; unit tests for the four cases.
+- M1: list attributes kept only the first item's page. Fixed: an item cited on another page is dropped as `other_page` (tested).
+- M2: `facts_current` could pick a winner with no `source_url` (constitution §1). Fixed: `extraction_finish` refuses `succeeded` for a document without a source URL; the upload requires the K-RERA page URL for RERA certificates and regulator sources (the UI says so); the service marks such a document `unsupported` / `source_url_missing`; the relaxed `value_matches_status` is documented in DATA_MODEL. Tested in unit, service and test:db.
+- L1: `max_tokens` → failed `truncated` (retryable), nothing stored (tested).
+- L2: a citation spanning more than one page is not used; with no one-page citation the value is dropped as `multi_page` (tested).
+- L3: `extraction_finish` raises on a duplicate attribute in `p_values` (test:db).
+- L4: storage `read()` returns the bytes with `contentType: null` for non-sniffable objects; the service maps that to unsupported / `not_pdf`; downloads refuse it (tested).
+
+## S3a K-RERA extraction — review round 2 (2026-10-24)
+Status: **pending re-review** of the round-1 fixes.
+
 ## S4a area developments — review round 1 (2026-10-24)
 Input: fd95768 (feat/06-area-developments); check 473, test:db 93, build, e2e 52.
 Verdict: **CHANGES REQUIRED** (3 high, 4 medium, 4 low, 3 nits).
@@ -163,9 +177,9 @@ Changes in cb23796, for each round-1 finding:
 - L4: `research_claim_jobs` filters by kind (the 2-argument form claims `search_miss` only). DB test, plus a deploy-order note in RESEARCH_WORKER.md.
 - Nits: km from 950 m; §11.3 placed after §11.2; review actions always revalidate public pages.
 
-## S4a area developments — review round 3 (2026-10-24) — pending re-review
-Input: the commit after cb23796 on feat/06-area-developments; check 498, test:db 100, area-developments e2e.
-Verdict: **pending re-review**. Fixes:
+## S4a area developments — review round 3 (2026-10-24)
+Input: 4f1f431 (gates re-run at 9f96c9e); check 498, test:db 100.
+Verdict: **PASS** (N1–N4 fixed; no critical, high or medium findings). Low, not blocking: a service_role session can clear `reviewed_at` directly (same class as `tn.via_rpc`); the D20→D22 comment edit changed 0008's checksum before it was applied anywhere. Fixes:
 - N1: new column `reviewed_at`, set by the first publish in `development_set_review` and kept after unpublish. `development_store_research` treats such a row as reviewed (pending_change, values kept). Mirrored in the fixture. Covered by a DB test (publish → unpublish → research) and a unit test.
 - N2: the item is inserted with `on conflict (name_key, source_url) where added_by = 'research' do nothing returning id`. When no row comes back, the existing row is re-selected `for update` and the existing branches run. A DB test with two connections stores the same new item concurrently: both succeed on one row.
 - N3: NEGATION also matches the apostrophe-stripped forms (`isn t`, `hasn t`, `wasn t`, …). Tests cover "isn't approved", "hasn't been approved" and "wasn't sanctioned", both in `stageFromText` and in the cited window.

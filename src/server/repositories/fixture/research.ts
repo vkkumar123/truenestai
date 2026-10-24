@@ -236,4 +236,14 @@ export class FixtureResearchRepository implements ResearchRepository {
   async documentExistsAtPath(storagePath: string): Promise<boolean> {
     return [...this.documentMeta.values()].some((m) => m.storagePath === storagePath);
   }
+
+  /** Fixture-only hook for FixtureDocumentExtractionRepository: the 'document_extracted' audit event. */
+  recordDocumentEvent(projectId: string, note: string, actor: AuditActor): void {
+    this.audit.push(
+      Object.freeze({
+        id: randomUUID(), at: new Date().toISOString(), actorId: actor.actorId, actorRole: actor.actorRole,
+        projectId, field: "documents", action: "document_extracted", fromVerification: null, toVerification: null, note,
+      } satisfies FactAuditEvent),
+    );
+  }
 }

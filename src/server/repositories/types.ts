@@ -298,6 +298,80 @@ export interface FactStoreRepository {
   getCurrent(entityType: FactEntityType, entityId: string, attribute: string): Promise<CurrentFact | null>;
 }
 
+// ---- S3a: K-RERA document extraction (0007_document_extraction.sql, D19) ----
+
+export type DocumentExtractionStatus = "running" | "succeeded" | "failed" | "unsupported";
+
+/** One extraction of one document version (document_extractions). Counts only; never values. */
+export interface DocumentExtraction {
+  id: string;
+  documentId: string;
+  projectId: string;
+  status: DocumentExtractionStatus;
+  errorCode: string | null;
+  model: string | null;
+  keptCount: number;
+  droppedCount: number;
+  /** Reason code -> count (not_cited, not_verbatim, personal_data, ...). */
+  droppedReasons: Record<string, number>;
+  attempts: number;
+  requestedBy: string;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
+/** A value to store: validated, verbatim in a citation, no personal data (src/research/extraction). */
+export interface ExtractedValueInput {
+  attribute: string;
+  valueText: string | null;
+  valueNum: number | null;
+  valueDate: string | null;
+  valueJson: string[] | null;
+  pageNumber: number;
+  excerpt: string;
+}
+
+/** An extracted observation as stored (always unverified, official, rera or fixture source type). */
+export interface DocumentObservation extends ExtractedValueInput {
+  id: string;
+  documentId: string;
+  projectId: string;
+  unit: string | null;
+  truthStatus: "official";
+  sourceType: string;
+  verification: "unverified";
+  observedAt: string;
+  lastVerifiedAt: string;
+}
+
+export type StartExtractionResult =
+  | { outcome: "started"; extraction: DocumentExtraction }
+  | { outcome: "done"; extraction: DocumentExtraction } // succeeded or unsupported: never re-run
+  | { outcome: "in_progress"; extraction: DocumentExtraction }
+  | { outcome: "not_found" };
+
+export interface FinishExtractionInput {
+  status: Exclude<DocumentExtractionStatus, "running">;
+  errorCode: string | null;
+  values: ExtractedValueInput[];
+  droppedCount: number;
+  droppedReasons: Record<string, number>;
+}
+
+/**
+ * Service role only in Supabase (extraction_start / extraction_finish RPCs). start() is the
+ * idempotency gate per document version; finish() writes observations + counts + one audit event
+ * ('documents' / 'document_extracted') atomically, and only for a running extraction.
+ */
+export interface DocumentExtractionRepository {
+  start(documentId: string, model: string, actor: AuditActor, staleMinutes: number): Promise<StartExtractionResult>;
+  /** null when the extraction is not running (finished elsewhere). */
+  finish(extractionId: string, input: FinishExtractionInput, actor: AuditActor): Promise<DocumentExtraction | null>;
+  listForProject(projectId: string): Promise<DocumentExtraction[]>;
+  /** Observations linked to the project's uploaded documents. */
+  listObservationsForProject(projectId: string): Promise<DocumentObservation[]>;
+}
+
 export interface Repositories {
   backend: "fixture" | "supabase";
   projects: ProjectRepository;
@@ -307,6 +381,8 @@ export interface Repositories {
   leads: LeadRepository;
   /** Read-only fact store (facts_current). */
   factStore: FactStoreRepository;
+  /** K-RERA document extraction runs + their observations (S3a). */
+  documentExtractions: DocumentExtractionRepository;
   /** Object storage for project documents (private; server-side access only). */
   documentStorage: DocumentStorage;
 }

@@ -35,7 +35,7 @@ d("migration runner + seed", () => {
 
   it("applies every migration once, with a ledger, then the seed", async () => {
     const r = await migrate(c, { migrationsDir: MIGRATIONS, seedFiles: [SEED], sampleSeed: true });
-    expect(r.applied).toEqual(["0001_core.sql", "0002_research_audit.sql", "0003_m2_live.sql", "0004_m2_review.sql", "0005_research_jobs.sql", "0006_fact_store.sql"]);
+    expect(r.applied).toEqual(["0001_core.sql", "0002_research_audit.sql", "0003_m2_live.sql", "0004_m2_review.sql", "0005_research_jobs.sql", "0006_fact_store.sql", "0007_document_extraction.sql"]);
     expect(r.seeded).toEqual(["seed.sql"]);
     const ledger = (await c.query("select name, length(checksum) as len from private.schema_migrations order by name")).rows;
     expect(ledger).toEqual(r.applied.map((name) => ({ name, len: 64 })));
@@ -45,7 +45,7 @@ d("migration runner + seed", () => {
     const before = await Promise.all(["projects", "facts", "fact_sources", "sources", "localities"].map((t) => count(c, t)));
     const r = await migrate(c, { migrationsDir: MIGRATIONS, seedFiles: [SEED, REFERENCE], sampleSeed: true });
     expect(r.applied).toEqual([]);
-    expect(r.skipped).toHaveLength(6);
+    expect(r.skipped).toHaveLength(7);
     const after = await Promise.all(["projects", "facts", "fact_sources", "sources", "localities"].map((t) => count(c, t)));
     expect(after).toEqual(before);
   });

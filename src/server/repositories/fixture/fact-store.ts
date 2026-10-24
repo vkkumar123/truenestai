@@ -112,41 +112,55 @@ function isOfficialSource(sourceId: string): boolean {
   return !!s && ["regulator", "government", "developer"].includes(s.type) && !isWebResearchSource(sourceId) && s.status !== "rejected";
 }
 
+/** Curated Project fields that map to a catalogue attribute via legacy_field (0006 + 0007). */
+const CURATED_FIELDS = [
+  { field: "declaredPossession", attribute: "promised_possession", legacy: "declared_possession" },
+  { field: "address", attribute: "address", legacy: "address" },
+  { field: "reraNumbers", attribute: "rera_numbers", legacy: "rera_numbers" },
+] as const;
+
 /** Current curated facts whose field maps to a catalogue attribute (as the view merges them). */
 function curatedCandidates(projects: readonly Project[]): FactCandidateInput[] {
-  const attr = getFactAttribute("project", "promised_possession")!;
-  // M2: a known curated value without a source never enters facts_current
-  return projects.filter((p) => p.declaredPossession.status === "unknown" || p.declaredPossession.sources.length > 0).map((p) => {
-    const f = p.declaredPossession;
-    const newestFirst = [...f.sources].sort((x, y) => y.observedAt.localeCompare(x.observedAt));
-    // M3: an official-qualifying source represents the fact when there is one, then the newest
-    const latest = newestFirst.find((s) => isOfficialSource(s.sourceId)) ?? newestFirst[0];
-    const official = f.sources.some((s) => isOfficialSource(s.sourceId));
-    const truth = f.truth ?? (f.status === "unknown" ? "unknown" : official ? "official" : "estimated");
-    const observedAt = latest?.observedAt ?? p.lastCheckedAt;
-    const text = f.status === "known" && typeof f.value === "string" ? f.value : null;
-    const date = tryIsoDate(text); // L2: served and compared as a date
-    return {
-      ...base,
-      entity_id: p.id,
-      origin: "curated" as const,
-      fact_id: `${p.id}:declared_possession`,
-      attribute: attr.attribute,
-      value_text: date ? null : text,
-      value_date: date,
-      truth_status: truth,
-      estimate_basis: truth === "estimated" ? { sources: newestFirst.map((s) => ({ sourceId: s.sourceId, url: s.url, observedAt: s.observedAt })) } : null,
-      verification: f.verification,
-      source_id: latest?.sourceId ?? null,
-      source_url: latest?.url ?? null,
-      source_type: latest ? specSourceType(latest.sourceId) : null,
-      observed_at: observedAt,
-      last_verified_at: f.lastVerifiedAt ?? observedAt,
-      ttl_hours: f.ttlHours ?? attr.defaultTtlHours,
-      added_by: "staff",
-      is_sample: p.isSample,
-    };
-  });
+  const out: FactCandidateInput[] = [];
+  for (const { field, attribute, legacy } of CURATED_FIELDS) {
+    const attr = getFactAttribute("project", attribute)!;
+    // M2: a known curated value without a source never enters facts_current
+    for (const p of projects) {
+      const f = p[field] as Project["declaredPossession"] | Project["address"] | Project["reraNumbers"];
+      if (!(f.status === "unknown" || f.sources.length > 0)) continue;
+      const newestFirst = [...f.sources].sort((x, y) => y.observedAt.localeCompare(x.observedAt));
+      // M3: an official-qualifying source represents the fact when there is one, then the newest
+      const latest = newestFirst.find((s) => isOfficialSource(s.sourceId)) ?? newestFirst[0];
+      const official = f.sources.some((s) => isOfficialSource(s.sourceId));
+      const truth = f.truth ?? (f.status === "unknown" ? "unknown" : official ? "official" : "estimated");
+      const observedAt = latest?.observedAt ?? p.lastCheckedAt;
+      const known = f.status === "known" ? (f.value as unknown) : null;
+      const text = typeof known === "string" ? known : null;
+      const date = attr.valueKind === "date" ? tryIsoDate(text) : null; // L2: served and compared as a date
+      out.push({
+        ...base,
+        entity_id: p.id,
+        origin: "curated" as const,
+        fact_id: `${p.id}:${legacy}`,
+        attribute: attr.attribute,
+        value_text: date ? null : text,
+        value_date: date,
+        value_json: known !== null && typeof known === "object" ? (known as object) : null,
+        truth_status: truth,
+        estimate_basis: truth === "estimated" ? { sources: newestFirst.map((s) => ({ sourceId: s.sourceId, url: s.url, observedAt: s.observedAt })) } : null,
+        verification: f.verification,
+        source_id: latest?.sourceId ?? null,
+        source_url: latest?.url ?? null,
+        source_type: latest ? specSourceType(latest.sourceId) : null,
+        observed_at: observedAt,
+        last_verified_at: f.lastVerifiedAt ?? observedAt,
+        ttl_hours: f.ttlHours ?? attr.defaultTtlHours,
+        added_by: "staff",
+        is_sample: p.isSample,
+      });
+    }
+  }
+  return out;
 }
 
 /**
@@ -154,6 +168,7 @@ function curatedCandidates(projects: readonly Project[]): FactCandidateInput[] {
  * project store, resolved with the same precedence as the SQL view. Read-only.
  */
 export class FixtureFactStoreRepository implements FactStoreRepository {
+  /** `observations` may be a shared mutable list (fixture document extraction appends to it). */
   constructor(
     private readonly projects: readonly Project[] = [],
     private readonly observations: readonly FactCandidateInput[] = SAMPLE_FACT_OBSERVATIONS,

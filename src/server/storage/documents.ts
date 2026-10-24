@@ -68,7 +68,10 @@ export interface DocumentStorage {
   remove(path: string): Promise<void>;
   /** Short-lived signed download URL (Supabase). Fixture storage has none → null. */
   signedUrl(path: string, ttlSeconds?: number): Promise<string | null>;
-  /** Raw bytes (fixture only; Supabase downloads go through signed URLs) → null when absent. */
+  /**
+   * Raw bytes → null when absent. Staff downloads in Supabase mode go through signed URLs; raw reads
+   * there are for server-side processing only (document extraction, S3a). Never logs the path.
+   */
   read(path: string): Promise<{ bytes: Uint8Array; contentType: DocumentContentType } | null>;
 }
 
@@ -118,7 +121,16 @@ export class SupabaseDocumentStorage implements DocumentStorage {
     if (error || !data?.signedUrl) throw new Error("signed URL failed");
     return data.signedUrl;
   }
-  async read(): Promise<null> {
-    return null;
+  async read(path: string): Promise<{ bytes: Uint8Array; contentType: DocumentContentType } | null> {
+    const { data, error } = await this.db().storage.from(DOCUMENT_BUCKET).download(path);
+    if (error) {
+      const status = String((error as { statusCode?: string | number }).statusCode ?? "");
+      if (status === "404" || status === "400" || /not.?found/i.test(error.message)) return null;
+      throw new Error(`storage download failed (${status || "unknown"})`);
+    }
+    if (!data) return null;
+    const bytes = new Uint8Array(await data.arrayBuffer());
+    const contentType = sniffContentType(bytes);
+    return contentType ? { bytes, contentType } : null;
   }
 }

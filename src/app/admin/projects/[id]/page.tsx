@@ -10,10 +10,13 @@ import { RESEARCH_FACT_FIELDS } from "@/research/fact-edit";
 import { canSetVerification } from "@/research/verification";
 import { isStaffAuthError, type StaffSession } from "@/server/auth";
 import { getStaffProjectView, listResearchSources } from "@/server/services/research";
+import { getDocumentExtractionViews, type DocumentExtractionView } from "@/server/services/document-extraction";
 import { Alert, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { FactEditForm, type SourceDraft } from "@/components/admin/fact-edit-form";
+import { ExtractDocumentForm } from "@/components/admin/extract-document-form";
+import { ExtractionResults } from "@/components/admin/extraction-results";
 import { DOCUMENT_KIND_LABELS, DocumentUploadForm } from "@/components/admin/document-upload-form";
 import { PublishForm } from "@/components/admin/publish-form";
 import { VerificationForm } from "@/components/admin/verification-form";
@@ -80,8 +83,10 @@ async function ProjectContent({ params }: { params: PageProps<"/admin/projects/[
   }
   const session = await requireStaffPage(`/admin/projects/${encodeURIComponent(id)}`);
   let view;
+  let extractions: Record<string, DocumentExtractionView> = {};
   try {
     view = await getStaffProjectView(id);
+    if (view.ok) extractions = await getDocumentExtractionViews(view.project.id);
   } catch (e) {
     if (isStaffAuthError(e)) redirect("/admin/login?next=%2Fadmin%2Fprojects");
     throw e;
@@ -177,7 +182,7 @@ async function ProjectContent({ params }: { params: PageProps<"/admin/projects/[
         })}
       </section>
 
-      <DocumentsSection project={project} sourceOptions={sourceOptions} />
+      <DocumentsSection project={project} sourceOptions={sourceOptions} extractions={extractions} />
 
       <AuditTable audit={audit} />
     </div>
@@ -217,7 +222,15 @@ function PublishPanel({ project, readiness, isAdmin }: { project: Project; readi
   );
 }
 
-function DocumentsSection({ project, sourceOptions }: { project: Project; sourceOptions: { id: string; name: string }[] }) {
+function DocumentsSection({
+  project,
+  sourceOptions,
+  extractions,
+}: {
+  project: Project;
+  sourceOptions: { id: string; name: string }[];
+  extractions: Record<string, DocumentExtractionView>;
+}) {
   const groups = new Map<string, Project["documents"]>();
   for (const d of project.documents) {
     const key = `${d.kind}:${d.title}`;
@@ -228,6 +241,11 @@ function DocumentsSection({ project, sourceOptions }: { project: Project; source
       <h2 id="docs-heading" className="text-lg font-semibold">
         Documents
       </h2>
+      <p className="text-sm text-muted-foreground">
+        K-RERA documents: download them by hand from the K-RERA portal and upload them here with source K-RERA. TrueNest never
+        accesses K-RERA automatically. &ldquo;Extract details&rdquo; has AI read a PDF and list what it finds, each value with its page;
+        every value stays unverified until staff review it. RERA registration is not title clearance.
+      </p>
       <div className="rounded-lg border border-border bg-surface p-4">
         {project.documents.length === 0 ? (
           <p className="text-sm text-muted-foreground">No documents recorded yet.</p>
@@ -242,20 +260,32 @@ function DocumentsSection({ project, sourceOptions }: { project: Project; source
                     <Badge tone="outline">{DOCUMENT_KIND_LABELS[sorted[0].kind] ?? sorted[0].kind}</Badge>
                   </p>
                   <ul className="space-y-1 pl-4">
-                    {sorted.map((d, i) => (
-                      <li key={d.id} className="flex flex-wrap items-center gap-x-2">
-                        <span className="font-medium">Version {d.version}</span>
-                        {i === 0 && sorted.length > 1 ? <span className="text-muted-foreground">(latest)</span> : null}
-                        <span className="text-muted-foreground">
-                          · Document date {d.documentDate ? formatDate(d.documentDate) : "not recorded"} · Source{" "}
-                          <code className="font-mono">{d.source.sourceId}</code>
-                        </span>
-                        {/* Staff-only route; plain <a> so the browser downloads the file. */}
-                        <a href={`/api/staff/documents/${encodeURIComponent(d.id)}`} className="text-primary underline">
-                          Download<span className="sr-only"> version {d.version} of {d.title}</span>
-                        </a>
-                      </li>
-                    ))}
+                    {sorted.map((d, i) => {
+                      const x = extractions[d.id];
+                      const status = x?.extraction?.status;
+                      const label = `version ${d.version} of ${d.title}`;
+                      return (
+                        <li key={d.id} className="space-y-2" data-testid={`document-${d.id}`}>
+                          <div className="flex flex-wrap items-center gap-x-2">
+                            <span className="font-medium">Version {d.version}</span>
+                            {i === 0 && sorted.length > 1 ? <span className="text-muted-foreground">(latest)</span> : null}
+                            <span className="text-muted-foreground">
+                              · Document date {d.documentDate ? formatDate(d.documentDate) : "not recorded"} · Source{" "}
+                              <code className="font-mono">{d.source.sourceId}</code>
+                            </span>
+                            {/* Staff-only route; plain <a> so the browser downloads the file. */}
+                            <a href={`/api/staff/documents/${encodeURIComponent(d.id)}`} className="text-primary underline">
+                              Download<span className="sr-only"> version {d.version} of {d.title}</span>
+                            </a>
+                          </div>
+                          {/* S3a: K-RERA document extraction (staff upload + AI extraction only, D19) */}
+                          {status === "succeeded" || status === "unsupported" || status === "running" ? null : (
+                            <ExtractDocumentForm documentId={d.id} label={label} retry={status === "failed"} />
+                          )}
+                          {x ? <ExtractionResults projectId={project.id} view={x} documentLabel={label} /> : null}
+                        </li>
+                      );
+                    })}
                   </ul>
                 </li>
               );

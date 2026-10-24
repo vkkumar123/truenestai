@@ -1,5 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
-import { E2E_ADMIN_DEV_PASSWORD, E2E_ADVISOR_DEV_PASSWORD, E2E_TEST_ONLY_SESSION_SECRET } from "./e2e/support";
+import { E2E_ADMIN_DEV_PASSWORD, E2E_ADVISOR_DEV_PASSWORD, E2E_RESEARCH_RUN_SECRET, E2E_TEST_ONLY_SESSION_SECRET } from "./e2e/support";
 
 // E2E journeys (J1–J7) run against `next dev` in fixture mode, not `next start`:
 // the dev-only admin password login is refused whenever NODE_ENV=production, and fixture
@@ -40,6 +40,8 @@ export default defineConfig({
       ADMIN_DEV_PASSWORD: E2E_ADMIN_DEV_PASSWORD,
       ADMIN_DEV_ADVISOR_PASSWORD: E2E_ADVISOR_DEV_PASSWORD,
       SESSION_SECRET: E2E_TEST_ONLY_SESSION_SECRET,
+      // Lets e2e/area-developments.spec.ts trigger the worker (fixture mode: in-memory queue, fake client).
+      RESEARCH_RUN_SECRET: E2E_RESEARCH_RUN_SECRET,
       MIN_RESEARCHED_RESULTS: "3",
       LEAD_RATE_LIMIT_MAX: "100",
       LEAD_RATE_LIMIT_WINDOW_SECONDS: "600",

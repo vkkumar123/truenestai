@@ -1,5 +1,6 @@
 // On-demand web research (Lane B). See docs/RESEARCH_WORKER.md.
 export * from "./client";
+export * from "./developments";
 export * from "./evidence";
 export * from "./fake-client";
 export * from "./portals";

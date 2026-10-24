@@ -8,6 +8,9 @@ import type { Project, RegulatoryRecord, RegulatorySearch } from "@/domain/types
 import { getLocality } from "@/config/markets";
 import { describeComplaintSearch, COMPLAINT_SCOPE_CAVEAT, REVIEW_FLAG_TEXT, reviewFlagsFor } from "@/research/evidence";
 import { getPublishedProject } from "@/server/services/projects";
+import { getPlannedNearProject } from "@/server/services/developments";
+import type { NearbyDevelopment } from "@/locality/developments";
+import { PlannedDevelopments } from "@/components/property/planned-developments";
 import { Alert, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
@@ -36,6 +39,12 @@ export default async function ProjectPage({ params }: PageProps<"/projects/[slug
   if (!project) notFound();
 
   const locality = getLocality(project.localityId)?.name ?? project.localityId;
+  let planned: NearbyDevelopment[] | null;
+  try {
+    planned = await getPlannedNearProject(project);
+  } catch {
+    planned = null; // shown as an error state, never as "nothing planned"
+  }
   const requestHref = (type: "verification" | "buyer_assistance") =>
     `/request?project=${encodeURIComponent(project.id)}&type=${type}&from=${encodeURIComponent(`/projects/${project.slug}`)}`;
 
@@ -118,6 +127,15 @@ export default async function ProjectPage({ params }: PageProps<"/projects/[slug
       <Section id="documents" title="Documents">
         <DocumentsList project={project} />
       </Section>
+
+      <section id="locality" aria-labelledby="locality-heading" className="space-y-3">
+        <h2 id="locality-heading" className="text-lg font-semibold">
+          Around {locality}
+        </h2>
+        <div className="rounded-lg border border-border bg-surface px-4 py-4">
+          <PlannedDevelopments items={planned} localityName={locality} headingLevel={3} />
+        </div>
+      </section>
 
       <ReviewBox project={project} />
 

@@ -69,6 +69,17 @@ Plan: `/mnt/project-files/truenest/specs-alignment-plan.md` §6. DB/server only,
 - [ ] Fury: C6/C7 decisions; staging then production apply.
 - [ ] Re-map M4–M8 onto spec slices S2–S10 (plan §4), once Fury answers the conflict register (D17).
 
+## S4a — Area developments (next 5–10 years) — **code done 2026-10-24**; review and Fury's D20 confirmation pending
+Owner requirement (2026-10-24): show buyers development plans for the next 5–10 years around a project. D20 (proposed).
+- [x] `0008_developments.sql` (additive): spec 06 columns on `infrastructure_items`, seven stage tiers, the `developments` view, an append-only `infrastructure_completion_history`, an append-only review audit, RPCs with version checks, column-level anon grants on published rows only, and `research_jobs.kind`.
+- [x] Locality research on the existing queue and worker (`area_developments`, key `dev:<locality>`) under the existing caps. The citation validator requires name, stage, authority and expected date verbatim in the same citation. Rows are always unverified.
+- [x] `/admin/developments`: per-locality "Research area developments"; review list with edit, publish (admin), unpublish, reject and restore, plus pending research changes and audit history; manual entry with a required authority URL.
+- [x] Project page section "Around {locality}" → "Planned around here (next 5–10 years)": the disclaimer, then for each item the stage, authority, "Expected (declared) …", slips, straight-line distance, source and last-checked date. Published rows only; otherwise "Not yet researched".
+- [x] Tests: unit (validator, stages, dates, slips, distance, service roles and readiness parity); `test:db` (constraints, RLS, append-only history, upsert vs pending change, RPC conflicts); e2e `area-developments.spec.ts` (fixture mode, SAMPLE on example.org).
+- [ ] Quality-reviewer pass logged in `REVIEW_LOG.md`.
+- [ ] Fury: confirm D20 and DATA_SOURCE_POLICY §11.3; staging then production apply of 0008.
+- [ ] Later: PostGIS geometry, a locality page listing, and a scheduled monitoring worker (M6).
+
 ## M4 — First approved external source adapter — **owner: R5**
 - [ ] Source registry entry `approved` with documented access method and terms.
 - [ ] Adapter implements `SourceAdapter`, respects rate limits/robots, stores no copied descriptions/images.

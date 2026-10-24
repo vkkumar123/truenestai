@@ -1,6 +1,10 @@
 import "server-only";
 import type {
   ConstructionStatus,
+  Development,
+  GeoPoint,
+  InfrastructureCategory,
+  InfrastructureStage,
   ExternalListing,
   FactAuditEvent,
   FactValue,
@@ -211,10 +215,13 @@ export interface ResearchRepository {
 // ---- M2.5: on-demand research jobs (docs/RESEARCH_WORKER.md) ----
 
 export type ResearchJobStatus = "queued" | "running" | "done" | "no_results" | "failed";
+/** search_miss = a buyer search found nothing (M2.5); area_developments = staff-requested locality development research (S4a). */
+export type ResearchJobKind = "search_miss" | "area_developments";
 
 /** A research job. queryText is the buyer's raw query: staff-visible, never logged. */
 export interface ResearchJob {
   id: string;
+  kind: ResearchJobKind;
   queryText: string;
   queryKey: string;
   localityId: string | null;
@@ -238,6 +245,8 @@ export interface EnqueueResearchInput {
   maxPerDay: number;
   /** Cap per requesterIpHash in the last 24 hours (ignored when the hash is null). */
   maxPerRequesterPerDay: number;
+  /** Default search_miss. area_developments keys are developmentQueryKey(localityId). */
+  kind?: ResearchJobKind;
 }
 
 export type EnqueueResearchResult =
@@ -298,6 +307,114 @@ export interface FactStoreRepository {
   getCurrent(entityType: FactEntityType, entityId: string, attribute: string): Promise<CurrentFact | null>;
 }
 
+// ---- S4a: planned area developments (0008_developments.sql, D20) ----
+
+export type DevelopmentReviewStatus = "pending" | "published" | "rejected";
+
+/** What research saw on a row staff had already published or rejected (never applied automatically). */
+export interface DevelopmentPendingChange {
+  stage: InfrastructureStage | null;
+  authority: string | null;
+  expectedCompletion: string | null;
+  observedAt: string | null;
+}
+
+/** A development with its staff-only review state. Never pass to public pages. */
+export interface StaffDevelopment extends Development {
+  published: boolean;
+  reviewStatus: DevelopmentReviewStatus;
+  rejectionNote: string | null;
+  pendingChange: DevelopmentPendingChange | null;
+  researchJobId: string | null;
+  researchLocalityId: string | null;
+  /** Optimistic-concurrency token: edits and review actions must post the version they saw. */
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Editable fields (staff create / edit). */
+export interface DevelopmentFields {
+  name: string;
+  category: InfrastructureCategory;
+  stage: InfrastructureStage;
+  authority: string | null;
+  expectedCompletion: string | null;
+  announcedDate: string | null;
+  localityIds: string[];
+  location: GeoPoint | null;
+  sourceId: string | null;
+  sourceUrl: string | null;
+  sourceObservedAt: string | null;
+}
+
+/** One validated, cited research item (src/discovery/research/developments.ts). */
+export interface ResearchedDevelopmentInput {
+  name: string;
+  category: InfrastructureCategory;
+  stage: InfrastructureStage;
+  authority: string | null;
+  expectedCompletion: string | null;
+  localityId: string;
+  sourceUrl: string;
+}
+
+export interface StoreResearchedDevelopmentsInput {
+  jobId: string;
+  researchLocalityId: string;
+  sourceId: string;
+  observedAt: string;
+  isSample: boolean;
+  items: ResearchedDevelopmentInput[];
+}
+
+export type DevelopmentReviewAction = "publish" | "unpublish" | "reject" | "restore";
+
+export type DevelopmentWriteResult =
+  | { ok: true; development: StaffDevelopment; changed: boolean; autoUnpublished: boolean }
+  | { ok: false; error: "not_found" | "conflict" | "not_ready" | "duplicate"; message: string; blockers?: string[] };
+
+export interface DevelopmentAuditEntry {
+  id: string;
+  developmentId: string;
+  action: "researched" | "created" | "edited" | "published" | "unpublished" | "rejected" | "restored";
+  fromVerification: VerificationState | null;
+  toVerification: VerificationState | null;
+  actorId: string;
+  actorRole: "advisor" | "admin" | "system";
+  at: string;
+  note: string | null;
+}
+
+export const DEVELOPMENT_CONFLICT_MESSAGE = "This development changed since you loaded it — reload and review again.";
+
+/**
+ * Developments store. listPublished is the PUBLIC read (published rows only; anon key + RLS in
+ * Supabase). Everything else is staff/worker-only (service role); callers enforce the session.
+ * Every write applies the change and its audit event atomically, and keeps the append-only
+ * completion history (a changed declared date appends one entry).
+ */
+export interface DevelopmentRepository {
+  listPublished(): Promise<Development[]>;
+  /** Rows listed for the locality or researched for it; newest first. */
+  listForStaff(filter: { localityId?: string; limit?: number }): Promise<StaffDevelopment[]>;
+  getForStaff(id: string): Promise<StaffDevelopment | null>;
+  /** Upsert by (name, cited URL). Pending rows take new values; reviewed rows get pendingChange. Returns ids. */
+  storeResearched(input: StoreResearchedDevelopmentsInput): Promise<string[]>;
+  create(fields: DevelopmentFields, isSample: boolean, actor: AuditActor): Promise<StaffDevelopment>;
+  update(id: string, expectedVersion: number, fields: DevelopmentFields, actor: AuditActor): Promise<DevelopmentWriteResult>;
+  review(
+    id: string,
+    expectedVersion: number,
+    action: DevelopmentReviewAction,
+    verification: "unverified" | "source_confirmed" | null,
+    note: string | null,
+    actor: AuditActor,
+  ): Promise<DevelopmentWriteResult>;
+  /** Oldest first. */
+  listAudit(id: string): Promise<DevelopmentAuditEntry[]>;
+}
+
 export interface Repositories {
   backend: "fixture" | "supabase";
   projects: ProjectRepository;
@@ -307,6 +424,8 @@ export interface Repositories {
   leads: LeadRepository;
   /** Read-only fact store (facts_current). */
   factStore: FactStoreRepository;
+  /** Planned area developments (S4a). */
+  developments: DevelopmentRepository;
   /** Object storage for project documents (private; server-side access only). */
   documentStorage: DocumentStorage;
 }

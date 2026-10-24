@@ -4,6 +4,7 @@
 import { findLocalitiesByText, isActiveLocality, listLocalities } from "@/config/markets";
 import type { ResearchClient, ResearchClientResult, ResearchContentBlock, ResearchRequest } from "./client";
 import { queryKey } from "./query";
+import { sampleDevelopmentResponder, type DevelopmentResearchClient, type DevelopmentResearchRequest } from "./developments";
 
 export type FakeResponder = (req: ResearchRequest) => ResearchClientResult | Promise<ResearchClientResult>;
 
@@ -71,10 +72,23 @@ export const sampleResponder: FakeResponder = (req) => {
   ]);
 };
 
-export class FakeResearchClient implements ResearchClient {
+export type FakeDevelopmentResponder = (req: DevelopmentResearchRequest) => ResearchClientResult | Promise<ResearchClientResult>;
+
+export class FakeResearchClient implements ResearchClient, DevelopmentResearchClient {
   readonly kind = "fake" as const;
   readonly calls: ResearchRequest[] = [];
-  constructor(private readonly responder: FakeResponder = sampleResponder) {}
+  readonly developmentCalls: Omit<DevelopmentResearchRequest, "signal">[] = [];
+  constructor(
+    private readonly responder: FakeResponder = sampleResponder,
+    private readonly developmentResponder: FakeDevelopmentResponder = sampleDevelopmentResponder,
+  ) {}
+
+  async researchDevelopments(req: DevelopmentResearchRequest): Promise<ResearchClientResult> {
+    const { signal, ...rest } = req;
+    this.developmentCalls.push(rest);
+    if (signal?.aborted) throw signal.reason ?? new Error("aborted");
+    return this.developmentResponder(req);
+  }
 
   async research(req: ResearchRequest): Promise<ResearchClientResult> {
     this.calls.push({ ...req, signal: undefined });

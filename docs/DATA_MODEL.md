@@ -73,7 +73,7 @@ called via `/rest/v1/rpc`. `is_staff()` / `staff_role()` stay in `public` (they 
 | projects | SELECT where `published` | — | service role |
 | developers, project_units, facts (current), fact_sources, regulatory_records, regulatory_searches | SELECT only for published projects | — | service role |
 | project_documents | SELECT (title, kind, version, dates, source; not `storage_path`/`sha256`/`size_bytes`/`content_type`/`uploaded_by`) for published projects | — | service role (`research_add_document`) |
-| infrastructure_items | SELECT where `published` | — | service role |
+| infrastructure_items | SELECT where `published`, public columns only (0008) | — | service role (S4a writes via RPCs) |
 | source_observations | none | none | service role |
 | staff_profiles | own row only (authenticated) | own row | service role |
 | project_search_index (view, `security_invoker`) | SELECT (inherits projects/facts/units RLS) | — | — |
@@ -297,3 +297,40 @@ view's rules). Tests: `tests/db/fact-store.test.ts`, `src/server/repositories/fa
 - Only `declared_possession` maps to the catalogue; `address`, `rera_numbers` and `construction_status` map to
   spec project columns in S1b, and unit price/area to `cost_sheets` (S5a).
 - Locality observations have no `is_sample` cross-check (localities carry no such flag).
+
+## Area developments (S4a, `0008_developments.sql`, D20 proposed)
+Spec 06 developments are added to the existing `infrastructure_items`. The migration is additive, and the legacy
+columns `declared_completion` and `sources` stay as trigger-maintained mirrors for S4a rows.
+
+| Object | What it holds |
+|---|---|
+| `infrastructure_items` (extended) | Stage `proposed, approved, dpr_approved, tendered, under_construction, operational, shelved` (C19). Category adds `suburban_rail, flyover, ring_road, zoning`. New columns: `authority`, `announced_date`, `expected_completion` (verbatim, as declared), `completion_history` (derived), `confidence`, `source_id`, `source_url` (https), `source_observed_at`, `verification`, `added_by` (`research`/`staff`; null = legacy row), `research_job_id`, `research_locality_id`, `rejected_at`/`rejection_note`, `pending_change`, `version`, `created_at`/`updated_at`, and the generated `name_key`. CHECKs: research rows carry source, URL and observed date; staff rows carry authority and URL; a published S4a row has authority, URL and observed date; a published row is never rejected. The unique index `(name_key, source_url)` on research rows means the same name on the same cited page is one row; rows are never merged on name alone. |
+| `infrastructure_completion_history` | Append-only (UPDATE/DELETE/TRUNCATE rejected for every role). Each row is one declared date as seen: `expected_completion`, `as_of`, `source_url`. Written only by a `security definer` trigger whenever `expected_completion` is set or changes. |
+| `infrastructure_review_events` | Append-only audit: `researched/created/edited/published/unpublished/rejected/restored` with actor and role. `system` may only record `researched`. |
+| `developments` (view, `security_invoker`) | Spec 06 names (`development_id`, `type`, `status`, `expected_completion`, `revisions_count` = declarations − 1, `last_verified_at`, …). The caller's RLS applies. |
+
+**Guard trigger.** S4a rows are inserted `unverified`. Identity columns never change. `verification` changes only
+inside the RPCs (`tn.via_rpc`). A direct write to `completion_history` is ignored, and a changed declared date
+appends a history entry. `version` bumps on any content change.
+
+**RPCs** (service role only, security invoker, row lock plus audit event):
+- `development_store_research` upserts researched items. A pending row takes the new values. A published or rejected row keeps its values and gets `pending_change`.
+- `development_create` is the staff manual entry.
+- `development_update` takes `p_expected_version` and returns `ok | unchanged | conflict | not_found`. A content change resets verification. An edit that fails readiness unpublishes the row in the same statement and audits it as `auto: failed readiness after edit`.
+- `development_set_review` handles publish, unpublish, reject and restore. Publish rechecks readiness via `tn_development_publish_blockers` (mirrored by `developmentPublishBlockers`, compared by a unit test) and may set `source_confirmed`.
+
+`research_enqueue` gains `p_kind` (`search_miss` default, or `area_developments`). A CHECK ties
+`kind = 'area_developments'` to `dev:%` keys that carry a locality.
+
+**Access.** anon and authenticated get SELECT on published rows only (0001 policy) and only on public columns.
+Hidden from them: the research job, rejection fields, pending change, version and timestamps. The history table
+is readable only for published developments (`private.is_published_development`). Review events are visible to
+staff only. The service role can SELECT, INSERT and UPDATE items, can SELECT history, and can SELECT and INSERT
+review events.
+
+**Server.**
+- `DevelopmentRepository` (`getRepositories().developments`) has two implementations. Supabase reads with the anon client for buyers and uses the service role plus RPCs for staff. Fixture is an in-memory mirror that starts empty, so buyers see "Not yet researched".
+- Services live in `src/server/services/developments.ts`, the pure logic (stage tiers, declared-date parsing, slips, haversine distance, wording) in `src/locality/developments.ts`, and the validator in `src/discovery/research/developments.ts`.
+- Buyer display lists mapped items within 10 km straight-line of the project, nearest first, then unmapped items listed for the project's locality.
+- Tests: `tests/db/developments.test.ts`, `src/locality/developments.test.ts`, `src/discovery/research/developments.test.ts`, `src/server/services/developments.test.ts`, `e2e/area-developments.spec.ts`.
+- Not done yet: PostGIS geometry (lat/lng only for now), and a monitoring worker that drafts stage changes on a schedule (M6).

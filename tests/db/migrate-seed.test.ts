@@ -3,7 +3,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import path from "node:path";
 import type { Client } from "pg";
-import { asRole, errorAs, REPO_ROOT, resetSchemas, tryConnect } from "./helpers";
+import { asRole, errorAs, migrationFiles, REPO_ROOT, resetSchemas, tryConnect } from "./helpers";
 
 vi.mock("server-only", () => ({}));
 
@@ -35,7 +35,11 @@ d("migration runner + seed", () => {
 
   it("applies every migration once, with a ledger, then the seed", async () => {
     const r = await migrate(c, { migrationsDir: MIGRATIONS, seedFiles: [SEED], sampleSeed: true });
-    expect(r.applied).toEqual(["0001_core.sql", "0002_research_audit.sql", "0003_m2_live.sql", "0004_m2_review.sql", "0005_research_jobs.sql", "0006_fact_store.sql"]);
+    // Every file in supabase/migrations, in order (0007 is reserved by another branch).
+    const all = migrationFiles().map((f) => path.basename(f));
+    expect(all.slice(0, 6)).toEqual(["0001_core.sql", "0002_research_audit.sql", "0003_m2_live.sql", "0004_m2_review.sql", "0005_research_jobs.sql", "0006_fact_store.sql"]);
+    expect(all).toContain("0008_developments.sql");
+    expect(r.applied).toEqual(all);
     expect(r.seeded).toEqual(["seed.sql"]);
     const ledger = (await c.query("select name, length(checksum) as len from private.schema_migrations order by name")).rows;
     expect(ledger).toEqual(r.applied.map((name) => ({ name, len: 64 })));
@@ -45,7 +49,7 @@ d("migration runner + seed", () => {
     const before = await Promise.all(["projects", "facts", "fact_sources", "sources", "localities"].map((t) => count(c, t)));
     const r = await migrate(c, { migrationsDir: MIGRATIONS, seedFiles: [SEED, REFERENCE], sampleSeed: true });
     expect(r.applied).toEqual([]);
-    expect(r.skipped).toHaveLength(6);
+    expect(r.skipped).toHaveLength(migrationFiles().length);
     const after = await Promise.all(["projects", "facts", "fact_sources", "sources", "localities"].map((t) => count(c, t)));
     expect(after).toEqual(before);
   });

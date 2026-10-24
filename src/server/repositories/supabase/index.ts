@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { supabaseEnv } from "../../env";
 import type { Repositories } from "../types";
 import { createAnonClient, createServiceRoleClient } from "./client";
+import { SupabaseDevelopmentRepository } from "./developments";
 import { SupabaseExternalListingRepository } from "./external-listings";
 import { SupabaseFactStoreRepository } from "./fact-store";
 import { SupabaseLeadRepository } from "./leads";
@@ -11,7 +12,7 @@ import { SupabaseResearchRepository } from "./research";
 import { SupabaseResearchJobRepository } from "./research-jobs";
 import { SupabaseDocumentStorage } from "../../storage/documents";
 
-export { SupabaseProjectRepository, SupabaseExternalListingRepository, SupabaseLeadRepository, SupabaseResearchRepository, SupabaseResearchJobRepository, SupabaseFactStoreRepository };
+export { SupabaseProjectRepository, SupabaseExternalListingRepository, SupabaseLeadRepository, SupabaseResearchRepository, SupabaseResearchJobRepository, SupabaseFactStoreRepository, SupabaseDevelopmentRepository };
 
 /** Validates env eagerly (clear error), creates the service-role client lazily on first use. */
 export function createSupabaseRepositories(): Repositories {
@@ -27,6 +28,7 @@ export function createSupabaseRepositories(): Repositories {
     researchJobs: new SupabaseResearchJobRepository(serviceClient),
     leads: new SupabaseLeadRepository(serviceClient),
     factStore: new SupabaseFactStoreRepository(serviceClient),
+    developments: new SupabaseDevelopmentRepository(anon, serviceClient),
     documentStorage: new SupabaseDocumentStorage(serviceClient),
   };
 }

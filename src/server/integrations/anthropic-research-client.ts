@@ -2,6 +2,10 @@ import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import {
   BLOCKED_PORTAL_DOMAINS,
+  DEVELOPMENT_SYSTEM_PROMPT,
+  buildDevelopmentUserPrompt,
+  type DevelopmentResearchClient,
+  type DevelopmentResearchRequest,
   RESEARCH_MAX_SEARCHES,
   RESEARCH_SYSTEM_PROMPT,
   ResearchClientError,
@@ -31,8 +35,10 @@ export const RESEARCH_REQUEST_TIMEOUT_MS = 110_000;
  * - max_uses caps searches; listing portals are blocked at the search.
  * - No SDK retries (the job retries at most once); refusals fall back server-side.
  * Never logs the key, prompt or response text.
+ * The same call loop serves buyer-search research (research) and locality development research
+ * (researchDevelopments, S4a/D20); only the prompts differ.
  */
-export class AnthropicResearchClient implements ResearchClient {
+export class AnthropicResearchClient implements ResearchClient, DevelopmentResearchClient {
   readonly kind = "anthropic" as const;
   private readonly client: Anthropic;
   private readonly model: string;
@@ -43,9 +49,15 @@ export class AnthropicResearchClient implements ResearchClient {
   }
 
   async research(req: ResearchRequest): Promise<ResearchClientResult> {
-    const messages: Anthropic.Beta.Messages.BetaMessageParam[] = [
-      { role: "user", content: buildResearchUserPrompt(req) },
-    ];
+    return this.run(RESEARCH_SYSTEM_PROMPT, buildResearchUserPrompt(req), req.signal);
+  }
+
+  async researchDevelopments(req: DevelopmentResearchRequest): Promise<ResearchClientResult> {
+    return this.run(DEVELOPMENT_SYSTEM_PROMPT, buildDevelopmentUserPrompt(req), req.signal);
+  }
+
+  private async run(system: string, userPrompt: string, signal: AbortSignal | undefined): Promise<ResearchClientResult> {
+    const messages: Anthropic.Beta.Messages.BetaMessageParam[] = [{ role: "user", content: userPrompt }];
     const content: ResearchContentBlock[] = [];
     const usage: ResearchUsage = { inputTokens: 0, outputTokens: 0, webSearchRequests: 0 };
     let stopReason: string | null = null;
@@ -61,7 +73,7 @@ export class AnthropicResearchClient implements ResearchClient {
             betas: ["server-side-fallback-2026-07-01"],
             fallbacks: "default",
             output_config: { effort: "medium" },
-            system: RESEARCH_SYSTEM_PROMPT,
+            system,
             tools: [
               {
                 type: "web_search_20250305",
@@ -73,7 +85,7 @@ export class AnthropicResearchClient implements ResearchClient {
             ],
             messages,
           },
-          { signal: req.signal },
+          { signal },
         );
       } catch (e) {
         throw toResearchError(e, usage);

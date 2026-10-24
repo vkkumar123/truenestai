@@ -138,3 +138,49 @@ Verdict: **CHANGES REQUIRED** (1 high, 2 medium, 4 low). All addressed in the fo
 
 ## S3a K-RERA extraction — review round 2 (2026-10-24)
 Status: **pending re-review** of the round-1 fixes.
+
+## S4a area developments — review round 1 (2026-10-24)
+Input: fd95768 (feat/06-area-developments); check 473, test:db 93, build, e2e 52.
+Verdict: **CHANGES REQUIRED** (3 high, 4 medium, 4 low, 3 nits).
+- H1: `stageFromText` mapped negated or future phrases to a real stage ("has not been approved" → approved, "expected to be operational by 2027" → operational).
+- H2: re-research refreshed `last_checked_at` even when it contradicted a published row; publish cleared `pending_change` without a record.
+- H3: no policy gate. `anthropic-web-search` storage permissions did not cover development fields, and nothing checked them.
+- M1: the locality could come from any citation of the URL, not the development's own.
+- M2: re-research overwrote an advisor's edits to a pending draft.
+- M3: the guard allowed inserting an S4a row published, and publishing outside the review RPC.
+- M4: distances said "from this project" when the project location is only a locality centroid.
+- L1: expected-year checks (amounts, distances, truncated financial years; horizon 15 → 10 years).
+- L2: the public read did not require `source_url`.
+- L3: the service role could delete or truncate `infrastructure_items`.
+- L4: a pre-S4a worker could claim an `area_developments` job.
+- Nits: 995 m showed as "1000 m"; §11.2/§11.3 order; unpublish did not revalidate public pages.
+
+## S4a area developments — review round 2 (2026-10-24)
+Input: cb23796 (feat/06-area-developments); check 493, test:db 98, build, e2e 52.
+Verdict: **PASS with 4 medium findings (N1–N4)**, fixed in round 3:
+- N1 (regression): a row that was published and then unpublished counted as a pending draft, so research overwrote its reviewed values.
+- N2 (regression): SELECT … FOR UPDATE followed by a plain INSERT made two concurrent jobs storing the same item fail on `infrastructure_items_research_uq`.
+- N3: negated contractions ("isn't approved") passed the cited-window check, because `words()` strips the apostrophe.
+- N4: a year followed by a comma ("2027, says BMRCL") was dropped.
+
+Changes in cb23796, for each round-1 finding:
+- H1: negation/future markers void a stage, both in the phrase and in the four cited words before it (future intent still counts as `proposed`). Tests cover the reviewer's examples.
+- H2: `development_store_research` rewritten as explicit branches. On a contradiction it sets `pending_change` and writes it into the audit note, and does not refresh `last_checked_at`. A match refreshes it. Publish and staff edits record the pending change they cleared. Covered by a DB test (publish "proposed 2028", research "shelved 2031") and a fixture mirror test.
+- H3: registry field `development_fields`, granted to `sample-web-research` and to `anthropic-web-search` on Fury's 2026-10-24 request (D22). Required at enqueue, in the worker job and in `researchLocalityDevelopments`. Refusal tested.
+- M1: the locality must be in the name's citation windows. Tested.
+- M2: `staff_edited_at` (set by `development_update`). A staff-edited draft is treated as reviewed. Mirrored in the fixture. DB and unit tests.
+- M3: the guard rejects S4a inserts with `published = true` and any unpublished-to-published change outside `tn.via_rpc`. DB tests.
+- M4: `PlannedDevelopments` takes the project's location precision and says "from the {locality} locality centre" or "approximate location". e2e asserts it.
+- L1: `declaredDateOk` rejects amounts and distances and truncated financial years; the horizon is now 10 years. Tests.
+- L2: `listPublished` (Supabase and fixture) requires `source_url`.
+- L3: DELETE and TRUNCATE revoked from service_role. DB test.
+- L4: `research_claim_jobs` filters by kind (the 2-argument form claims `search_miss` only). DB test, plus a deploy-order note in RESEARCH_WORKER.md.
+- Nits: km from 950 m; §11.3 placed after §11.2; review actions always revalidate public pages.
+
+## S4a area developments — review round 3 (2026-10-24)
+Input: 4f1f431 (gates re-run at 9f96c9e); check 498, test:db 100.
+Verdict: **PASS** (N1–N4 fixed; no critical, high or medium findings). Low, not blocking: a service_role session can clear `reviewed_at` directly (same class as `tn.via_rpc`); the D20→D22 comment edit changed 0008's checksum before it was applied anywhere. Fixes:
+- N1: new column `reviewed_at`, set by the first publish in `development_set_review` and kept after unpublish. `development_store_research` treats such a row as reviewed (pending_change, values kept). Mirrored in the fixture. Covered by a DB test (publish → unpublish → research) and a unit test.
+- N2: the item is inserted with `on conflict (name_key, source_url) where added_by = 'research' do nothing returning id`. When no row comes back, the existing row is re-selected `for update` and the existing branches run. A DB test with two connections stores the same new item concurrently: both succeed on one row.
+- N3: NEGATION also matches the apostrophe-stripped forms (`isn t`, `hasn t`, `wasn t`, …). Tests cover "isn't approved", "hasn't been approved" and "wasn't sanctioned", both in `stageFromText` and in the cited window.
+- N4: a year followed by a comma is accepted (`/^(\d|,\d)/` rejects only a digit or a thousands group). Tested with "expected by 2027, says BMRCL"; "20301" is still rejected.

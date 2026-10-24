@@ -68,3 +68,14 @@ export type WebResearchActionState =
   | { status: "researching"; queryText: string }
   | { status: "searched_none"; queryText: string; searchedAt: string }
   | { status: "unavailable"; queryText: string };
+
+/** Area developments admin actions (S4a). Initial state: `{ status: "idle" }`. */
+export type DevelopmentActionState =
+  | { status: "idle" }
+  | { status: "success"; message: string; developmentId?: string; autoUnpublished?: boolean }
+  | {
+      status: "error";
+      error: "validation" | "forbidden" | "not_found" | "not_ready" | "conflict" | "unauthenticated" | "unavailable";
+      message: string;
+      errors?: string[];
+    };

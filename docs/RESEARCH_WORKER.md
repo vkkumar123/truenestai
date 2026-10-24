@@ -67,3 +67,21 @@ The request uses the basic `web_search_20250305` tool (no dynamic filtering), so
   - 200: `{claimed, outcomes: [{jobId, status, resultCount, errorCode}]}`.
 - **Logs** contain job ids, statuses, counts and token usage only. They never contain the API key, the prompt, response text, query text or IPs. Staff see the query text on `/admin/research-jobs` (admin and advisor, read-only).
 - **Error codes** (`research_jobs.error_code`): `timeout`, `rate_limited`, `api_error`, `auth`, `bad_request`, `refusal`, `max_tokens`, `parse_error`, `no_evidence` (candidates with no search result blocks), `store_failed`, `unknown`, `stalled` (still queued after 30 minutes, which usually means the worker is not scheduled; the failure is cached for 6 hours), and `abandoned` (still running after 15 minutes on its second attempt).
+
+## Area development jobs (S4a, D22)
+- **Start.** Staff use "Research area developments" on `/admin/developments?locality=<id>`. This calls `requestAreaDevelopmentResearch` and then `research_enqueue(..., p_kind => 'area_developments')`. The key is `dev:<localityId>`, which never collides with a search-miss key (`queryKey()` output has no colon).
+- **Limits.** The same cache window, 6-hour failure cooldown and global `RESEARCH_MAX_JOBS_PER_DAY` apply. The per-requester cap is keyed by an HMAC of the staff user id. Automated actors cannot start research. Buyers cannot trigger it.
+- **Worker.** `runResearchBatch` sends `area_developments` jobs to `runAreaDevelopmentJob`, under the same deadline, retry and finish rules. The prompt (`src/discovery/research/developments.ts`) asks for infrastructure within about 5 km over the next 5–10 years, with verbatim facts and no comment on prices or returns. The localities named in it come from `src/config/markets/`.
+- **Validation.** `validateDevelopmentCandidates`:
+  - The name must be cited for a search-result URL, and the stored URL is the result's own spelling.
+  - The stage must be a cited phrase that `stageFromText` maps to a tier; with no tier, the row is dropped.
+  - The authority and the expected date (which must contain a 4-digit year) must sit within 200 characters of the name in the same citation, or that field is dropped.
+  - The locality must map to exactly one active configured locality and be cited.
+  - The date must fall between last year and +10 years. A year that is an amount or distance ("Rs 2,030 crore", "2030 km"), or a part of a financial year ("2027" from "2027-28"), is dropped.
+  - A negated or future stage phrase ("has not been approved", "yet to be tendered", "will be opened"), whether in the phrase itself or in the four words before it, states no stage, so the item is dropped. Future intent still counts as `proposed`.
+  - The locality must be named in the development's own citation window, not elsewhere on the page.
+  - Promotional names (appreciation, returns, investment …) are dropped.
+- **Store.** `development_store_research` saves rows unverified and unpublished, and audits each one as `researched` by `system:research`. A reviewed row is never overwritten (see DATA_MODEL). Logs carry counts and drop reasons only.
+- **Policy gate.** The research source must carry the registry permission `development_fields` (DATA_SOURCE_POLICY §11.3). Enqueue and the worker both refuse otherwise.
+- **Deploy order.** `0008` changes `research_claim_jobs(limit, stale)` to claim `search_miss` jobs only, and adds `research_claim_jobs(limit, stale, kinds)` for the S4a worker. Apply 0008 first, then deploy the app. A pre-S4a worker still running against the migrated database never claims an `area_developments` job, so it can't mistake one for a search. Deploying the app before 0008 fails the claim RPC call (unknown `p_kinds`) until the migration lands, which is safe: nothing is claimed.
+- **Fixture.** `sampleDevelopmentResponder` returns SAMPLE items on `example.org`: one fully cited, one with uncited authority and date (both fields dropped), and one fabricated (dropped). In e2e the worker endpoint is triggered with a test-only `RESEARCH_RUN_SECRET`.

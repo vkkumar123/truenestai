@@ -6,6 +6,7 @@ import type {
   EnqueueResearchResult,
   FinishResearchInput,
   ResearchJob,
+  ResearchJobKind,
   ResearchJobRepository,
   ResearchJobStatus,
   ResearchJobWithListings,
@@ -14,6 +15,7 @@ import { mapExternalListingRow, type ExternalListingRow } from "./mappers";
 
 interface ResearchJobRow {
   id: string;
+  kind?: ResearchJobKind;
   query_text: string;
   query_key: string;
   locality_id: string | null;
@@ -29,6 +31,7 @@ interface ResearchJobRow {
 function mapJob(r: ResearchJobRow): ResearchJob {
   return {
     id: r.id,
+    kind: r.kind ?? "search_miss",
     queryText: r.query_text,
     queryKey: r.query_key,
     localityId: r.locality_id,
@@ -52,7 +55,7 @@ function linkedListings(links: LinkRows): ExternalListing[] {
   });
 }
 
-const JOB_COLUMNS = "id, query_text, query_key, locality_id, status, attempts, requested_at, started_at, finished_at, result_count, error_code";
+const JOB_COLUMNS = "id, kind, query_text, query_key, locality_id, status, attempts, requested_at, started_at, finished_at, result_count, error_code";
 
 /** Service-role only (research_jobs has no client grants). Never pass rows to client components unfiltered. */
 export class SupabaseResearchJobRepository implements ResearchJobRepository {
@@ -67,6 +70,7 @@ export class SupabaseResearchJobRepository implements ResearchJobRepository {
       p_cache_hours: input.cacheHours,
       p_max_per_day: input.maxPerDay,
       p_max_per_requester: input.maxPerRequesterPerDay,
+      p_kind: input.kind ?? "search_miss",
     });
     if (error) throw new Error(`research_enqueue failed: ${error.code ?? "unknown"}`);
     const r = data as { outcome: EnqueueResearchResult["outcome"]; job?: ResearchJobRow };
@@ -86,7 +90,7 @@ export class SupabaseResearchJobRepository implements ResearchJobRepository {
   }
 
   async claim(limit: number, staleMinutes: number): Promise<ResearchJob[]> {
-    const { data, error } = await this.db().rpc("research_claim_jobs", { p_limit: limit, p_stale_minutes: staleMinutes });
+    const { data, error } = await this.db().rpc("research_claim_jobs", { p_limit: limit, p_stale_minutes: staleMinutes, p_kinds: ["search_miss", "area_developments"] });
     if (error) throw new Error(`research_claim_jobs failed: ${error.code ?? "unknown"}`);
     return ((data ?? []) as ResearchJobRow[]).map(mapJob);
   }

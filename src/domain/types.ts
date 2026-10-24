@@ -73,12 +73,31 @@ export type ConstructionStatus =
   | "stalled"
   | "unknown";
 
+/**
+ * Infrastructure tier (constitution §5, C19, D22). `approved` is kept (in-principle approval or
+ * sanction before a DPR); `dpr_approved` and `shelved` were added by S4a.
+ */
 export type InfrastructureStage =
   | "proposed"
   | "approved"
+  | "dpr_approved"
   | "tendered"
   | "under_construction"
-  | "operational";
+  | "operational"
+  | "shelved";
+
+export type InfrastructureCategory =
+  | "metro"
+  | "suburban_rail"
+  | "rail"
+  | "road"
+  | "flyover"
+  | "ring_road"
+  | "airport"
+  | "zoning"
+  | "water"
+  | "power"
+  | "other";
 
 export interface GeoPoint {
   lat: number;
@@ -173,13 +192,49 @@ export type PropertyResult = Project | ExternalListing;
 export interface InfrastructureItem {
   id: string;
   name: string;
-  category: "metro" | "rail" | "road" | "airport" | "water" | "power" | "other";
+  category: InfrastructureCategory;
   stage: InfrastructureStage;
   localityIds: string[];
   location: GeoPoint | null;
   declaredCompletion: FactValue<string>; // only with evidence; never a promise
   sources: SourceRef[];
   lastCheckedAt: string;
+  isSample: boolean;
+}
+
+// ---- S4a: planned area developments (D22) ----
+
+/** One declared expected-completion value, as seen on a source on a date (append-only history). */
+export interface DeclaredCompletionRevision {
+  /** As declared by the source, verbatim (e.g. "December 2027"). Never a TrueNest prediction. */
+  expectedCompletion: string;
+  /** When the source stated it (the observation date). */
+  asOf: string;
+  sourceUrl: string | null;
+}
+
+/**
+ * A planned or existing piece of public infrastructure (metro, road, ring road, zoning change…).
+ * Researched rows are found by automated web research and are always unverified until staff
+ * review; only staff-published rows are shown to buyers. Nothing here predicts prices or returns.
+ */
+export interface Development {
+  id: string;
+  name: string;
+  category: InfrastructureCategory;
+  stage: InfrastructureStage;
+  authority: string | null; // as named by the source; null = not yet found
+  expectedCompletion: string | null; // as declared, verbatim; null = no declared date found
+  announcedDate: string | null; // ISO date, staff-entered
+  completionHistory: DeclaredCompletionRevision[]; // oldest first
+  localityIds: string[];
+  location: GeoPoint | null; // null = not yet mapped
+  sourceId: string | null; // registry id; null for a staff manual entry citing an authority page
+  sourceUrl: string | null;
+  sourceObservedAt: string | null;
+  lastCheckedAt: string;
+  verification: VerificationState;
+  addedBy: "research" | "staff";
   isSample: boolean;
 }
 

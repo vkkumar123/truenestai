@@ -7,6 +7,8 @@ import { expect, type Browser, type Page } from "@playwright/test";
 export const E2E_ADMIN_DEV_PASSWORD = "e2e-admin-password-123";
 export const E2E_ADVISOR_DEV_PASSWORD = "e2e-advisor-password-456"; // test-only; must differ from the admin one
 export const E2E_TEST_ONLY_SESSION_SECRET = "e2e-test-only-session-secret-not-a-real-secret-0"; // 48 chars
+/** Test-only worker trigger secret (>= 32 chars); fixture mode only, so the run uses the fake client. */
+export const E2E_RESEARCH_RUN_SECRET = "e2e-test-only-research-run-secret-not-real-00"; // 45 chars
 
 // Fixture facts the journeys rely on (src/server/repositories/fixture/sample-projects.ts,
 // src/discovery/fixtures.ts). Thanisandra has 1 published researched project (< MIN_RESEARCHED_RESULTS=3),

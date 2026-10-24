@@ -17,7 +17,9 @@ export type StorableField =
   | "canonical_url"
   | "source_record_id"
   | "rera_number"
-  | "address";
+  | "address"
+  /** Area development fields (S4a, D22): name, type, cited stage, authority, declared date, locality, cited URL. */
+  | "development_fields";
 
 export interface SourceEntry {
   id: string;
@@ -82,7 +84,7 @@ export const SOURCE_REGISTRY: readonly SourceEntry[] = [
     termsReviewedAt: null,
     robotsNotes: "Not applicable: fake research client over fictional example.com pages, no network access.",
     rateLimitPerMinute: 0,
-    storagePermissions: ["title", "developer_name", "locality", "price_text", "canonical_url", "rera_number", "address"],
+    storagePermissions: ["title", "developer_name", "locality", "price_text", "canonical_url", "rera_number", "address", "development_fields"],
     allowedEnvironments: ["test", "development"],
     listingLimitations: [RESEARCH_LIMITATION, "SAMPLE fictional data for testing only. Not a real property."],
     notes: "Stands in for anthropic-web-search in fixture mode, tests and CI (fake research client, never the network).",
@@ -100,7 +102,9 @@ export const SOURCE_REGISTRY: readonly SourceEntry[] = [
     robotsNotes:
       "No crawling by TrueNest. Pages are searched and read only by Anthropic's server-side web search tool through the Messages API; the worker never fetches a page itself.",
     rateLimitPerMinute: 10,
-    storagePermissions: ["title", "developer_name", "locality", "price_text", "canonical_url", "rera_number", "address"],
+    // development_fields: granted 2026-10-24 on the owner's request for "development plans for next
+    // 5-10 years in the nearby area" (DECISIONS D22, DATA_SOURCE_POLICY §11.3).
+    storagePermissions: ["title", "developer_name", "locality", "price_text", "canonical_url", "rera_number", "address", "development_fields"],
     // Staging also runs NODE_ENV=production. Test, CI and local development use the
     // sample-web-research fixture source with the fake client instead.
     allowedEnvironments: ["production"],

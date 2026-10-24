@@ -26,6 +26,7 @@ import {
   type ResearchJob,
   type ResearchJobWithListings,
 } from "../repositories";
+import { runAreaDevelopmentJob } from "./developments";
 import { FixedWindowRateLimiter } from "./rate-limit";
 
 /** New research jobs one client may start per hour (in-memory, per instance; the DB caps per day). */
@@ -338,6 +339,7 @@ export async function runResearchBatch(deps: ResearchBatchDeps = {}): Promise<Re
   const outcomes = await Promise.all(
     jobs.map(async (job): Promise<ResearchJobOutcome> => {
       const controller = new AbortController();
+      if (job.kind === "area_developments") return runDevelopmentJobWithOutcome(job, { repos, client, source, env, now, controller, timeoutMs });
       try {
         const r = await withDeadline(
           researchQuery(job.queryText, {
@@ -411,6 +413,58 @@ export async function runResearchBatch(deps: ResearchBatchDeps = {}): Promise<Re
     }),
   );
   return { refused: null, claimed: jobs.length, outcomes };
+}
+
+/**
+ * An area_developments job (S4a): same deadline, retry and finish rules as a search job; stored
+ * rows are unverified, unpublished developments (never listings). Logs counts and codes only.
+ */
+async function runDevelopmentJobWithOutcome(
+  job: ResearchJob,
+  ctx: { repos: Repositories; client: ResearchClient; source: SourceEntry; env: RuntimeEnv; now: () => Date; controller: AbortController; timeoutMs: number },
+): Promise<ResearchJobOutcome> {
+  try {
+    const { stored, run } = await withDeadline(
+      runAreaDevelopmentJob(job, { repos: ctx.repos, client: ctx.client, source: ctx.source, env: ctx.env, now: ctx.now(), signal: ctx.controller.signal }),
+      ctx.controller,
+      ctx.timeoutMs,
+    );
+    const status = stored ? "done" : "no_results";
+    const diagnosis = stored ? null : noResultsCode(run.validation, run);
+    await ctx.repos.researchJobs.finish(job.id, { status, resultCount: stored, errorCode: diagnosis, listingIds: [] });
+    const sum = (m: Partial<Record<string, number>>) => Object.values(m).reduce<number>((a, b) => a + (b ?? 0), 0);
+    log.info("research.job_finished", {
+      jobId: job.id,
+      kind: job.kind,
+      status,
+      attempt: job.attempts,
+      resultCount: stored,
+      candidates: run.validation.received,
+      accepted: run.validation.accepted,
+      dropped: sum(run.validation.dropped),
+      dropReasons: JSON.stringify(run.validation.dropped),
+      fieldsDroppedBy: JSON.stringify(run.validation.fieldsDropped),
+      diagnosis,
+      searchResultBlocks: run.evidence.searchResultBlocks,
+      citations: run.evidence.citations,
+      inputTokens: run.usage.inputTokens,
+      outputTokens: run.usage.outputTokens,
+      webSearchRequests: run.usage.webSearchRequests,
+    });
+    return { jobId: job.id, status, resultCount: stored, errorCode: diagnosis };
+  } catch (e) {
+    const err = e instanceof ResearchClientError ? e : new ResearchClientError("unknown", false);
+    const retry = err.retryable && job.attempts < RESEARCH_MAX_ATTEMPTS;
+    let finished: ResearchJob | null = null;
+    try {
+      finished = await ctx.repos.researchJobs.finish(job.id, { status: retry ? "queued" : "failed", resultCount: 0, errorCode: err.code, listingIds: [] });
+    } catch {
+      // stays running; reclaimed after RESEARCH_STALE_MINUTES
+    }
+    const status = finished?.status ?? "running";
+    log.warn("research.job_failed", { jobId: job.id, kind: job.kind, status, attempt: job.attempts, errorCode: err.code });
+    return { jobId: job.id, status, resultCount: 0, errorCode: err.code };
+  }
 }
 
 /** Staff view (admin and advisor, read-only): recent jobs with their stored listings. */

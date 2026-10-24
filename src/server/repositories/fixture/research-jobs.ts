@@ -61,6 +61,7 @@ export class FixtureResearchJobRepository implements ResearchJobRepository {
       return { outcome: "requester_cap" };
     const row: Row = {
       id: randomUUID(),
+      kind: input.kind ?? "search_miss",
       queryText: input.queryText.slice(0, 100),
       queryKey: input.queryKey,
       localityId: input.localityId,

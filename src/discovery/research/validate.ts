@@ -68,7 +68,7 @@ const candidateSchema = z.object({
 });
 
 /** Lower-case letters/digits (any script) separated by single spaces, padded for whole-word checks. */
-function words(s: string): string {
+export function words(s: string): string {
   // "&" and "and" are the same word in project names ("Sun & Sanctum" / "Sun and Sanctum").
   return ` ${s.normalize("NFKC").toLowerCase().replace(/&/g, " and ").replace(/[^\p{L}\p{N}]+/gu, " ").trim()} `;
 }

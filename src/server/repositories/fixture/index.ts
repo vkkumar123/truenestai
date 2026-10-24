@@ -1,6 +1,7 @@
 import "server-only";
 import type { Project } from "@/domain/types";
 import type { Repositories } from "../types";
+import { FixtureDevelopmentRepository } from "./developments";
 import { FixtureExternalListingRepository } from "./external-listings";
 import { FixtureDocumentExtractionRepository } from "./document-extractions";
 import { FixtureFactStoreRepository, SAMPLE_FACT_OBSERVATIONS } from "./fact-store";
@@ -11,7 +12,7 @@ import { FixtureResearchJobRepository } from "./research-jobs";
 import { SAMPLE_PROJECTS } from "./sample-projects";
 import { FixtureDocumentStorage } from "../../storage/documents";
 
-export { FixtureProjectRepository, FixtureExternalListingRepository, FixtureLeadRepository, FixtureResearchRepository, FixtureResearchJobRepository, FixtureFactStoreRepository, FixtureDocumentExtractionRepository };
+export { FixtureProjectRepository, FixtureExternalListingRepository, FixtureLeadRepository, FixtureResearchRepository, FixtureResearchJobRepository, FixtureFactStoreRepository, FixtureDocumentExtractionRepository, FixtureDevelopmentRepository };
 export { SAMPLE_PROJECTS };
 
 /** Public reads and staff writes share one mutable copy of the sample projects. */
@@ -30,6 +31,7 @@ export function createFixtureRepositories(): Repositories {
     leads: new FixtureLeadRepository(),
     factStore: new FixtureFactStoreRepository(store, observations),
     documentExtractions: new FixtureDocumentExtractionRepository(research, store, observations),
+    developments: new FixtureDevelopmentRepository(),
     documentStorage: new FixtureDocumentStorage(),
   };
 }

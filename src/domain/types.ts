@@ -27,11 +27,40 @@ export interface SourceRef {
   note?: string;
 }
 
+/**
+ * What kind of claim a fact is (constitution §2), orthogonal to VerificationState (D18, proposed):
+ * official = from the builder, RERA or a government body; estimated = derived by us from public
+ * signals (always shown with its basis and date, never styled as official); unknown = nothing
+ * credible found yet (never a negative finding).
+ */
+export type FactTruthStatus = "official" | "estimated" | "unknown";
+
+/** The basis of an estimated fact. */
+export interface FactEstimateBasis {
+  sources: SourceRef[];
+  assumptionsVersion?: string;
+  signalCount?: number;
+}
+
+/** Another live value for the same attribute (constitution §3: contradictions are shown). */
+export interface FactConflict<T> {
+  value: T | null;
+  truth: FactTruthStatus;
+  verification?: VerificationState;
+  source: SourceRef | null; // null only for a curated value stored without a source
+}
+
 export interface FactValue<T> {
   status: "known" | "unknown"; // unknown = we have not found it; not a negative finding
   value: T | null;
   verification: VerificationState;
   sources: SourceRef[];
+  // S1a fact store (D18). Optional until every repository fills them.
+  truth?: FactTruthStatus;
+  lastVerifiedAt?: string;
+  ttlHours?: number;
+  estimateBasis?: FactEstimateBasis;
+  conflicts?: FactConflict<T>[];
 }
 
 export type DiscoveryLane = "researched" | "external";

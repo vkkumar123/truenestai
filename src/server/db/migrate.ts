@@ -150,6 +150,15 @@ export async function migrate(client: SqlClient, opts: MigrateOptions): Promise<
         if (rows[0]?.has_sample) {
           throw new MigrationError("Refusing to mark production: the database contains SAMPLE projects (is_sample = true). Remove them first.");
         }
+        // 0006: observations carry their own is_sample (they survive deleting the project).
+        // Checked in two steps so a database without the table (dry run before 0006) never errors.
+        const hasTable = (await client.query("select to_regclass('public.fact_observations') is not null as ok")).rows[0]?.ok;
+        const obs = hasTable
+          ? await client.query("select exists (select 1 from public.fact_observations where is_sample) as has_sample")
+          : { rows: [{ has_sample: false }] };
+        if (obs.rows[0]?.has_sample) {
+          throw new MigrationError("Refusing to mark production: the database contains SAMPLE fact observations (is_sample = true). Remove them first.");
+        }
       }
       log(`${opts.dryRun ? "would mark" : "marking"} environment = ${opts.markEnvironment}`);
       if (!opts.dryRun) {

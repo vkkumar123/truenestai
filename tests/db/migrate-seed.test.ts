@@ -35,7 +35,7 @@ d("migration runner + seed", () => {
 
   it("applies every migration once, with a ledger, then the seed", async () => {
     const r = await migrate(c, { migrationsDir: MIGRATIONS, seedFiles: [SEED], sampleSeed: true });
-    expect(r.applied).toEqual(["0001_core.sql", "0002_research_audit.sql", "0003_m2_live.sql", "0004_m2_review.sql", "0005_research_jobs.sql"]);
+    expect(r.applied).toEqual(["0001_core.sql", "0002_research_audit.sql", "0003_m2_live.sql", "0004_m2_review.sql", "0005_research_jobs.sql", "0006_fact_store.sql"]);
     expect(r.seeded).toEqual(["seed.sql"]);
     const ledger = (await c.query("select name, length(checksum) as len from private.schema_migrations order by name")).rows;
     expect(ledger).toEqual(r.applied.map((name) => ({ name, len: 64 })));
@@ -45,7 +45,7 @@ d("migration runner + seed", () => {
     const before = await Promise.all(["projects", "facts", "fact_sources", "sources", "localities"].map((t) => count(c, t)));
     const r = await migrate(c, { migrationsDir: MIGRATIONS, seedFiles: [SEED, REFERENCE], sampleSeed: true });
     expect(r.applied).toEqual([]);
-    expect(r.skipped).toHaveLength(5);
+    expect(r.skipped).toHaveLength(6);
     const after = await Promise.all(["projects", "facts", "fact_sources", "sources", "localities"].map((t) => count(c, t)));
     expect(after).toEqual(before);
   });
@@ -126,6 +126,22 @@ d("migration runner + seed", () => {
     expect((await errorAs(c, "authenticated", null, "select * from private.settings"))?.code).toBe("42501");
   });
 
+  it("0006 L1: marking production is refused while SAMPLE fact observations remain, even after SAMPLE projects are gone", async () => {
+    await c.query("begin");
+    try {
+      const p = SAMPLE_PROJECTS[0];
+      await c.query(
+        `insert into fact_observations (entity_type, entity_id, attribute, status, source_id, source_type, observed_at, last_verified_at, ttl_hours, added_by, is_sample)
+         values ('project', $1, 'oc_status', 'unknown', 'sample-feed', 'search', now(), now(), 72, 'research', true)`,
+        [p.id],
+      );
+      await c.query("delete from projects where is_sample; delete from developers where is_sample");
+      await expect(migrate(c, { migrationsDir: MIGRATIONS, markEnvironment: "production" })).rejects.toThrow(/SAMPLE fact observations/);
+    } finally {
+      await c.query("rollback");
+    }
+  });
+
   it("L5: reference seed carries no fixture sources; the SAMPLE seed adds them", async () => {
     const { readFileSync } = await import("node:fs");
     expect(readFileSync(REFERENCE, "utf8")).not.toMatch(/'fixture'/);
@@ -155,10 +171,18 @@ d("migration runner + seed", () => {
     try {
       // 1) every RERA fact reviewed; 2) every address disputed; 3) sources removed from possession;
       // 4) all unit prices unknown.
+      // 0006: verification changes only inside the audited RPCs (tn.via_rpc); this test stages states directly
+      await c.query("select set_config('tn.via_rpc', 'on', true)");
       await c.query("update facts set verification = 'reviewed' where field = 'rera_numbers' and is_current");
       await c.query("update facts set verification = 'disputed' where field = 'address' and is_current");
       await c.query("delete from fact_sources where fact_id in (select id from facts where field = 'declared_possession')");
-      await c.query("update facts set status = 'unknown', value = null where field = 'unit_price_inr'");
+      // 0006 guard: a fact's value/status never change in place, so supersede with a new current row.
+      await c.query(`
+        with old as (
+          update facts set is_current = false where field = 'unit_price_inr' and is_current
+          returning project_id, unit_id, field, verification)
+        insert into facts (project_id, unit_id, field, value, status, verification)
+          select project_id, unit_id, field, null, 'unknown', verification from old`);
       await compareAll("mutated", (p) => {
         p.reraNumbers.verification = "reviewed";
         p.address.verification = "disputed";

@@ -9,6 +9,7 @@ Each milestone is a small vertical slice. **Done** means: acceptance criteria me
 | M1 | First buyer journey on fixtures | none |
 | M2 | Supabase persistence + Auth | **R2, R7** |
 | M3 | Manual research tooling | none (needs M2) |
+| S1a | Spec 02 fact store skeleton (D17, D18) | none new; staging/prod apply via Fury |
 | M4 | First approved external source | **R5** |
 | M5 | RERA lookup workflow | **R6** for automation |
 | M6 | Locality, infrastructure, amenities, maps | **R4** |
@@ -58,6 +59,15 @@ Journeys J1–J7 from `PRODUCT_SPEC.md`.
 - [x] Verification workflow: `unverified → source_confirmed/reviewed/disputed/requires_professional_review`, with reviewer identity and timestamp (audit log).
 - [x] Publish toggle gated on review; completeness score recomputed.
 - [ ] → M2: Document upload to Storage with versioning (needs Supabase Storage).
+
+## S1a — Spec 02 fact store skeleton — **done 2026-10-23** (review PASS, see REVIEW_LOG); staging/production apply via Fury
+Plan: `/mnt/project-files/truenest/specs-alignment-plan.md` §6. DB/server only, no public page changes.
+- [x] `0006_fact_store.sql` (additive): `fact_attributes` catalogue (spec 02, legal flags proposed), `fact_observations`, append-only `fact_observations_history`, `facts_current` (precedence, `conflicts`, `is_stale`) and `facts_history` views, curated `facts` truth/TTL columns + backfill + guard trigger, CHECK that every observation stays unverified, web search never official, truncate refused on facts/fact_sources/observations, RLS on, service role only (default service_role privileges revoked).
+- [x] `test:db`: builder-vs-RERA conflict, `unknown` within TTL, automated row cannot be verified, history immutable even for service_role, existing D12/D13 RPC and readiness parity tests still pass.
+- [x] Read-only `FactStoreRepository` (Supabase + SAMPLE fixture) with unit tests; optional `FactValue` fields (D18).
+- [x] Quality-reviewer PASS (constitution first, then spec 02) logged in `REVIEW_LOG.md`: round 1 (6221878) CHANGES REQUIRED, round 2 (d53368f) PASS; the round-2 follow-ups are closed in the next commit.
+- [ ] Fury: C6/C7 decisions; staging then production apply.
+- [ ] Re-map M4–M8 onto spec slices S2–S10 (plan §4), once Fury answers the conflict register (D17).
 
 ## M4 — First approved external source adapter — **owner: R5**
 - [ ] Source registry entry `approved` with documented access method and terms.

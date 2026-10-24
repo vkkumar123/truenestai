@@ -72,6 +72,10 @@ describe("infrastructure stages", () => {
     "approval pending",
     "no tender has been floated",
     "hasn't been sanctioned",
+    "isn't approved",
+    "hasn't been approved",
+    "wasn't sanctioned",
+    "isn’t approved",
     "to be completed soon",
   ])("a negated or future phrase states no tier: %j", (text) => {
     expect(stageFromText(text)).toBeNull();

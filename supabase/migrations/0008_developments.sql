@@ -160,6 +160,7 @@ alter table public.infrastructure_items
   add column rejection_note text,
   add column pending_change jsonb,                   -- research seen after review; staff decide
   add column staff_edited_at timestamptz,            -- last staff content edit; research then never overwrites
+  add column reviewed_at timestamptz,                -- first published by staff; stays set after unpublish
   add column version integer not null default 1,
   add column created_at timestamptz not null default now(),
   add column updated_at timestamptz not null default now(),
@@ -384,20 +385,27 @@ begin
     v_stage := it->>'stage';
     v_authority := nullif(it->>'authority', '');
     v_expected := nullif(it->>'expectedCompletion', '');
-    select * into r from public.infrastructure_items
-      where added_by = 'research' and source_url = it->>'sourceUrl'
-        and name_key = btrim(lower(regexp_replace(it->>'name', '[^[:alnum:]]+', ' ', 'g')))
-      for update;
-    if not found then
-      insert into public.infrastructure_items (id, name, category, stage, authority, expected_completion, locality_ids,
-          source_id, source_url, source_observed_at, last_checked_at, added_by, research_job_id, research_locality_id,
-          is_sample, published)
-        values (gen_random_uuid()::text, it->>'name', it->>'category', v_stage, v_authority, v_expected,
-          array[it->>'localityId'], p_source_id, it->>'sourceUrl', p_observed_at, p_observed_at, 'research', p_job_id,
-          p_research_locality_id, p_is_sample, false)
-        returning id into v_id;
+    -- Insert first; ON CONFLICT DO NOTHING waits for a concurrent job storing the same item and then
+    -- yields no row, so two jobs never fail on infrastructure_items_research_uq.
+    v_id := null;
+    insert into public.infrastructure_items (id, name, category, stage, authority, expected_completion, locality_ids,
+        source_id, source_url, source_observed_at, last_checked_at, added_by, research_job_id, research_locality_id,
+        is_sample, published)
+      values (gen_random_uuid()::text, it->>'name', it->>'category', v_stage, v_authority, v_expected,
+        array[it->>'localityId'], p_source_id, it->>'sourceUrl', p_observed_at, p_observed_at, 'research', p_job_id,
+        p_research_locality_id, p_is_sample, false)
+      on conflict (name_key, source_url) where added_by = 'research' do nothing
+      returning id into v_id;
+    if v_id is null then
+      select * into r from public.infrastructure_items
+        where added_by = 'research' and source_url = it->>'sourceUrl'
+          and name_key = btrim(lower(regexp_replace(it->>'name', '[^[:alnum:]]+', ' ', 'g')))
+        for update;
+    end if;
+    if v_id is not null then
       v_note := 'found by web research';
-    elsif not r.published and r.rejected_at is null and r.staff_edited_at is null then
+    -- a pending draft: never published, never rejected, never edited by staff
+    elsif not r.published and r.rejected_at is null and r.staff_edited_at is null and r.reviewed_at is null then
       update public.infrastructure_items set
           last_checked_at = p_observed_at, research_job_id = p_job_id, category = it->>'category', stage = v_stage,
           authority = v_authority, expected_completion = coalesce(v_expected, r.expected_completion),
@@ -552,7 +560,8 @@ begin
     v_to := coalesce(p_verification, r.verification);
     perform set_config('tn.via_rpc', 'on', true);
     update public.infrastructure_items
-      set published = true, rejected_at = null, rejection_note = null, verification = v_to, pending_change = null
+      set published = true, rejected_at = null, rejection_note = null, verification = v_to, pending_change = null,
+          reviewed_at = coalesce(reviewed_at, now())   -- once reviewed, research never overwrites (even after unpublish)
       where id = p_id returning * into n;
     perform set_config('tn.via_rpc', 'off', true);
   elsif p_action = 'unpublish' then

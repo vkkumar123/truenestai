@@ -77,7 +77,8 @@ Owner requirement (2026-10-24): show buyers development plans for the next 5–1
 - [x] Project page section "Around {locality}" → "Planned around here (next 5–10 years)": the disclaimer, then for each item the stage, authority, "Expected (declared) …", slips, straight-line distance, source and last-checked date. Published rows only; otherwise "Not yet researched".
 - [x] Tests: unit (validator, stages, dates, slips, distance, service roles and readiness parity); `test:db` (constraints, RLS, append-only history, upsert vs pending change, RPC conflicts); e2e `area-developments.spec.ts` (fixture mode, SAMPLE on example.org).
 - [x] Quality review round 1 (fd95768): CHANGES REQUIRED; all findings addressed (REVIEW_LOG).
-- [ ] Quality review round 2 PASS logged in `REVIEW_LOG.md` (pending re-review).
+- [x] Quality review round 2 (cb23796): PASS with N1–N4; fixed in round 3 (REVIEW_LOG).
+- [ ] Quality review round 3 logged in `REVIEW_LOG.md` (pending re-review).
 - [ ] Fury: confirm D20 and DATA_SOURCE_POLICY §11.3; staging then production apply of 0008.
 - [ ] Later: PostGIS geometry, a locality page listing, and a scheduled monitoring worker (M6).
 

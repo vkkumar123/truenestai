@@ -261,6 +261,16 @@ describe("re-research vs reviewed rows (mirror of development_store_research)", 
     expect(last.note).toMatch(/cleared pending research change: .*shelved/);
   });
 
+  it("a row published once and then unpublished stays reviewed: research only records a pending change", async () => {
+    const ctx = await researched();
+    const metro = (await staffItem(ctx, NAMES.metro)).development;
+    const pub = await svc.reviewDevelopment({ id: metro.id, version: String(metro.version), action: "publish" }, ctx.admin);
+    const v = pub.ok ? pub.development.version : 0;
+    expect(await svc.reviewDevelopment({ id: metro.id, version: String(v), action: "unpublish" }, ctx.admin)).toMatchObject({ ok: true });
+    await again(ctx, metro.sourceUrl!, { stage: "shelved" });
+    expect((await staffItem(ctx, NAMES.metro)).development).toMatchObject({ stage: "under_construction", published: false, pendingChange: { stage: "shelved" } });
+  });
+
   it("a research source without the development_fields permission is refused at enqueue and in the worker", async () => {
     const { repos, advisor } = setup();
     const base = jobs.researchSourceFor(repos.backend);

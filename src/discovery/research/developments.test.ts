@@ -117,7 +117,7 @@ describe("development validator (anti-fabrication)", () => {
   });
 
   it("drops a stage the page negates or puts in the future, even when the phrase itself is plain", () => {
-    for (const lead of ["has not been", "is yet to be", "is expected to be", "will be"]) {
+    for (const lead of ["has not been", "is yet to be", "is expected to be", "will be", "isn't", "hasn't been", "wasn't"]) {
       const cited = `SAMPLE Alpha Metro Line serving ${LOC.name} ${lead} approved by the SAMPLE Metro Authority. Fictional.`;
       const r = validate([{ ...good, stageText: "approved", expectedCompletion: null }], evidence([{ url: URL_A, citedText: cited }]));
       expect(r.dropped, lead).toEqual({ stage_not_cited: 1 });
@@ -145,6 +145,8 @@ describe("development validator (anti-fabrication)", () => {
     expect(withText("2027", "2027-28").accepted[0].expectedCompletion).toBeNull();
     expect(withText("2027-28", "2027-28").accepted[0].expectedCompletion).toBe("2027-28");
     expect(withText("2030", "2030").accepted[0].expectedCompletion).toBe("2030");
+    expect(withText("2027", "2027, says BMRCL").accepted[0].expectedCompletion).toBe("2027");
+    expect(withText("2030", "20301 units").accepted[0].expectedCompletion).toBeNull(); // year cut out of a longer number
     expect(withText("2038", "2038").dropped).toEqual({ out_of_horizon: 1 });
   });
 });

@@ -306,4 +306,44 @@ d("developments (0008)", () => {
       expect((await errorAs(c, "anon", null, "select research_claim_jobs(1, 15, array['search_miss'])"))?.code).toBe("42501");
     });
   });
+
+  describe("review round 2 fixes", () => {
+    it("N1: publish → unpublish → research keeps the reviewed values and records a pending change", async () => {
+      const item = { name: "SAMPLE Hebbal Unpublished Link", category: "road", stage: "approved", authority: "SAMPLE Roads Board", expectedCompletion: "2029", localityId: "hebbal", sourceUrl: "https://example.org/sample-developments/hebbal/unpub" };
+      const [id] = await store([item]);
+      const pub = await review(id, (await row(id)).version, "publish");
+      expect((await row(id)).reviewed_at).not.toBeNull();
+      const un = await review(id, pub.version, "unpublish");
+      expect(un.status).toBe("ok");
+      await store([{ ...item, stage: "shelved", authority: "SAMPLE Other Board" }], "2026-12-20T00:00:00Z");
+      expect(await row(id)).toMatchObject({
+        published: false,
+        stage: "approved",
+        authority: "SAMPLE Roads Board",
+        pending_change: { stage: "shelved", authority: "SAMPLE Other Board" },
+      });
+    });
+
+    it("N2: two jobs storing the same new item concurrently both succeed on one row", async () => {
+      const c2conn = await tryConnect();
+      const c2 = c2conn.client as Client;
+      try {
+        const item = { name: "SAMPLE Hebbal Concurrent Metro", category: "metro", stage: "proposed", authority: null, expectedCompletion: null, localityId: "hebbal", sourceUrl: "https://example.org/sample-developments/hebbal/concurrent" };
+        await c.query("begin");
+        const first = await store([item], OBS, c); // uncommitted: holds the unique-index entry
+        const second = store([item], "2026-10-25T00:00:00Z", c2); // blocks on the unique index
+        await new Promise((r) => setTimeout(r, 300));
+        await c.query("commit");
+        const ids2 = await second;
+        expect(ids2).toEqual(first);
+        const n = (await c.query("select count(*)::int as n from infrastructure_items where source_url = $1", [item.sourceUrl])).rows[0].n;
+        expect(n).toBe(1);
+        const notes = (await c.query("select note from infrastructure_review_events where development_id = $1 order by id", [first[0]])).rows.map((r) => r.note);
+        expect(notes).toEqual(["found by web research", "seen again by web research (pending draft updated)"]);
+      } finally {
+        await c.query("rollback").catch(() => {});
+        await c2?.end();
+      }
+    });
+  });
 });

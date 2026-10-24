@@ -29,6 +29,8 @@ export class FixtureDevelopmentRepository implements DevelopmentRepository {
   private readonly rejected = new Set<string>();
   /** Rows a staff member edited (staff_edited_at in SQL): research never overwrites them. */
   private readonly staffEdited = new Set<string>();
+  /** Rows staff have published at least once (reviewed_at in SQL): still reviewed after unpublish. */
+  private readonly reviewed = new Set<string>();
   private readonly audit: DevelopmentAuditEntry[] = [];
   /** Append-only, like infrastructure_completion_history. */
   private readonly history: (DeclaredCompletionRevision & { developmentId: string })[] = [];
@@ -118,7 +120,7 @@ export class FixtureDevelopmentRepository implements DevelopmentRepository {
       // Same rules as development_store_research: a pending draft takes the new values; a reviewed
       // row (published, rejected or edited by staff) keeps its values, gets pending_change on a
       // contradiction, and its last-checked date is refreshed only when research matches it.
-      const pending = !r.published && !this.rejected.has(r.id) && !this.staffEdited.has(r.id);
+      const pending = !r.published && !this.rejected.has(r.id) && !this.staffEdited.has(r.id) && !this.reviewed.has(r.id);
       r.researchJobId = input.jobId;
       let note: string;
       if (pending) {
@@ -243,6 +245,7 @@ export class FixtureDevelopmentRepository implements DevelopmentRepository {
       const blockers = developmentPublishBlockers(r);
       if (blockers.length) return { ok: false, error: "not_ready", message: "Not ready to publish.", blockers };
       r.published = true;
+      this.reviewed.add(id);
       this.rejected.delete(id);
       r.rejectionNote = null;
       r.verification = verification ?? r.verification;

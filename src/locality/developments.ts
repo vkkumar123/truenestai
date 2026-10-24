@@ -103,7 +103,8 @@ const STAGE_PHRASES: readonly [RegExp, InfrastructureStage][] = [
 ];
 
 /** Negation: "has not been approved", "no tender", "yet to be approved", "awaiting approval". */
-const NEGATION = /\b(not|no|never|nor|yet to|awaiting|pending|without)\b|n't\b/;
+// "n't" as written, and as "isn t" after words() strips the apostrophe (cited-window checks).
+const NEGATION = /\b(not|no|never|nor|yet to|awaiting|pending|without)\b|n't\b|\b(isn|wasn|hasn|haven|hadn|aren|weren|doesn|didn|won|can|couldn|shouldn) t\b/;
 /** Future or expectation: "expected to be operational", "will be opened", "likely to be tendered". */
 const FUTURE = /\b(expected to|likely to|set to|due to|will|shall|would|to be|soon|upcoming|plans? to|scheduled to)\b/;
 

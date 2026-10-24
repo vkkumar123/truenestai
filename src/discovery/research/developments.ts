@@ -189,7 +189,8 @@ export function declaredDateOk(value: string, windows: readonly string[]): boole
       const after = text.slice(at + needle.length);
       const before = text.slice(0, at);
       if (/^\s*[-–/]\s*\d{2}\b/.test(after) || /\d[-–/]\s*$/.test(before)) return false; // part of a financial year
-      if (/\d$/.test(needle) && (NOT_A_YEAR_AFTER.test(after) || /^[\d,]/.test(after))) return false;
+      // "2027, says BMRCL" is a year; "2,030" or "20301" is not
+      if (/\d$/.test(needle) && (NOT_A_YEAR_AFTER.test(after) || /^(\d|,\d)/.test(after))) return false;
       if (/^\d/.test(needle) && (NOT_A_YEAR_BEFORE.test(before) || /[\d,.]$/.test(before))) return false;
     }
   }

@@ -141,9 +141,15 @@ Verdict: **CHANGES REQUIRED** (3 high, 4 medium, 4 low, 3 nits).
 - L4: a pre-S4a worker could claim an `area_developments` job.
 - Nits: 995 m showed as "1000 m"; §11.2/§11.3 order; unpublish did not revalidate public pages.
 
-## S4a area developments — review round 2 (2026-10-24) — pending re-review
-Input: the commit after fd95768 on feat/06-area-developments; check 493, test:db 98, build, area-developments e2e.
-Verdict: **pending re-review**. Changes for each round-1 finding:
+## S4a area developments — review round 2 (2026-10-24)
+Input: cb23796 (feat/06-area-developments); check 493, test:db 98, build, e2e 52.
+Verdict: **PASS with 4 medium findings (N1–N4)**, fixed in round 3:
+- N1 (regression): a row that was published and then unpublished counted as a pending draft, so research overwrote its reviewed values.
+- N2 (regression): SELECT … FOR UPDATE followed by a plain INSERT made two concurrent jobs storing the same item fail on `infrastructure_items_research_uq`.
+- N3: negated contractions ("isn't approved") passed the cited-window check, because `words()` strips the apostrophe.
+- N4: a year followed by a comma ("2027, says BMRCL") was dropped.
+
+Changes in cb23796, for each round-1 finding:
 - H1: negation/future markers void a stage, both in the phrase and in the four cited words before it (future intent still counts as `proposed`). Tests cover the reviewer's examples.
 - H2: `development_store_research` rewritten as explicit branches. On a contradiction it sets `pending_change` and writes it into the audit note, and does not refresh `last_checked_at`. A match refreshes it. Publish and staff edits record the pending change they cleared. Covered by a DB test (publish "proposed 2028", research "shelved 2031") and a fixture mirror test.
 - H3: registry field `development_fields`, granted to `sample-web-research` and to `anthropic-web-search` on Fury's 2026-10-24 request (D20). Required at enqueue, in the worker job and in `researchLocalityDevelopments`. Refusal tested.
@@ -156,3 +162,11 @@ Verdict: **pending re-review**. Changes for each round-1 finding:
 - L3: DELETE and TRUNCATE revoked from service_role. DB test.
 - L4: `research_claim_jobs` filters by kind (the 2-argument form claims `search_miss` only). DB test, plus a deploy-order note in RESEARCH_WORKER.md.
 - Nits: km from 950 m; §11.3 placed after §11.2; review actions always revalidate public pages.
+
+## S4a area developments — review round 3 (2026-10-24) — pending re-review
+Input: the commit after cb23796 on feat/06-area-developments; check 498, test:db 100, area-developments e2e.
+Verdict: **pending re-review**. Fixes:
+- N1: new column `reviewed_at`, set by the first publish in `development_set_review` and kept after unpublish. `development_store_research` treats such a row as reviewed (pending_change, values kept). Mirrored in the fixture. Covered by a DB test (publish → unpublish → research) and a unit test.
+- N2: the item is inserted with `on conflict (name_key, source_url) where added_by = 'research' do nothing returning id`. When no row comes back, the existing row is re-selected `for update` and the existing branches run. A DB test with two connections stores the same new item concurrently: both succeed on one row.
+- N3: NEGATION also matches the apostrophe-stripped forms (`isn t`, `hasn t`, `wasn t`, …). Tests cover "isn't approved", "hasn't been approved" and "wasn't sanctioned", both in `stageFromText` and in the cited window.
+- N4: a year followed by a comma is accepted (`/^(\d|,\d)/` rejects only a digit or a thousands group). Tested with "expected by 2027, says BMRCL"; "20301" is still rejected.

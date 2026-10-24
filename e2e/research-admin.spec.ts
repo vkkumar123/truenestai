@@ -65,7 +65,7 @@ async function setVerification(page: Page, field: Field, label: string) {
 async function expectNotPublic(page: Page) {
   await page.goto(`/projects?q=${encodeURIComponent(PROJECT_NAME)}&lane=researched`);
   await expect(page.getByText(/^0 results/)).toBeVisible();
-  await expect(page.getByRole("link", { name: PROJECT_NAME })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: PROJECT_NAME, exact: true })).toHaveCount(0);
   await expect(page.getByRole("region", { name: "Researched by TrueNest" }).getByText(PROJECT_NAME)).toHaveCount(0);
 }
 

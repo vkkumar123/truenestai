@@ -283,6 +283,16 @@ function withDeadline<T>(p: Promise<T>, controller: AbortController, ms: number)
 }
 
 /**
+ * Why a finished job stored nothing: "no_candidates" (the model found nothing), "drop_<reason>"
+ * (the most frequent validator drop reason) or "not_stored" (accepted, then removed by dedupe).
+ */
+export function noResultsCode(v: { received: number; accepted: number; dropped: Partial<Record<string, number>> }): string {
+  if (v.received === 0) return "no_candidates";
+  const top = Object.entries(v.dropped).sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0) || a[0].localeCompare(b[0]))[0];
+  return top && (top[1] ?? 0) > 0 ? `drop_${top[0]}` : "not_stored";
+}
+
+/**
  * Processes up to RESEARCH_BATCH_SIZE queued jobs concurrently. Refuses (claims nothing) unless
  * the research source is runnable in this environment. Stores survivors as unverified Lane B
  * listings; never publishes, verifies or creates researched (Lane A) projects.
@@ -336,7 +346,10 @@ export async function runResearchBatch(deps: ResearchBatchDeps = {}): Promise<Re
           throw new ResearchClientError("store_failed", true, r.usage);
         }
         const status = stored.length ? "done" : "no_results";
-        await repos.researchJobs.finish(job.id, { status, resultCount: stored.length, errorCode: null, listingIds: stored.map((l) => l.id) });
+        // A no_results job records why (a short code readable in the DB): no candidates at all,
+        // or the most frequent validator drop reason.
+        const diagnosis = stored.length ? null : noResultsCode(r.validation);
+        await repos.researchJobs.finish(job.id, { status, resultCount: stored.length, errorCode: diagnosis, listingIds: stored.map((l) => l.id) });
         const sum = (m: Partial<Record<string, number>>) => Object.values(m).reduce<number>((a, b) => a + (b ?? 0), 0);
         log.info("research.job_finished", {
           jobId: job.id,
@@ -346,13 +359,16 @@ export async function runResearchBatch(deps: ResearchBatchDeps = {}): Promise<Re
           candidates: r.validation.received,
           accepted: r.validation.accepted,
           dropped: sum(r.validation.dropped),
+          dropReasons: JSON.stringify(r.validation.dropped),
           fieldsDropped: sum(r.validation.fieldsDropped),
+          fieldsDroppedBy: JSON.stringify(r.validation.fieldsDropped),
+          diagnosis,
           reviewFlags: r.reviewFlags,
           inputTokens: r.usage.inputTokens,
           outputTokens: r.usage.outputTokens,
           webSearchRequests: r.usage.webSearchRequests,
         });
-        return { jobId: job.id, status, resultCount: stored.length, errorCode: null };
+        return { jobId: job.id, status, resultCount: stored.length, errorCode: diagnosis };
       } catch (e) {
         const err = e instanceof ResearchClientError ? e : new ResearchClientError("unknown", false);
         const retry = err.retryable && job.attempts < RESEARCH_MAX_ATTEMPTS;

@@ -35,6 +35,18 @@ test.describe("on-demand research", () => {
     await expect(page.getByRole("status").filter({ hasText: /researching/i })).toBeVisible();
   });
 
+  test("a filtered or researched-only miss offers the unfiltered search that can research it", async ({ page }) => {
+    const q = "SAMPLE zzq filtered lofts";
+    await page.goto(`/projects?q=${encodeURIComponent(q)}&bhk=3&lane=researched`);
+    const hint = page.getByRole("status").filter({ hasText: /Search all results to research/ });
+    await expect(hint).toBeVisible();
+    // Filters alone never start research.
+    await expect(page.getByRole("status").filter({ hasText: /researching/i })).toHaveCount(0);
+    await hint.getByRole("link", { name: `Search all results for “${q}”` }).click();
+    await expect(page).toHaveURL((u) => u.pathname === "/projects" && u.searchParams.get("q") === q && !u.searchParams.has("bhk") && !u.searchParams.has("lane"));
+    await expect(page.getByRole("status").filter({ hasText: /researching/i })).toBeVisible();
+  });
+
   test("without JavaScript, the GET enqueues nothing and the plain form POST starts research", async ({ request }) => {
     // Under cacheComponents the dynamic results stream into a hidden element that an inline script
     // reveals, so a JS-less browser cannot click it. We replay exactly what a no-JS form submit sends:

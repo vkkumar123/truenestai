@@ -91,14 +91,20 @@ export function stageRank(stage: InfrastructureStage): number {
 /**
  * Phrases that state a tier, most specific first. A researched stage is accepted only when one of
  * these phrases is what the cited page says (see src/discovery/research/developments.ts).
+ * "Foundation stone" and "trial run(s)" are deliberately not mapped: they state no settled tier.
  */
 const STAGE_PHRASES: readonly [RegExp, InfrastructureStage][] = [
   [/\b(shelved|scrapped|cancell?ed|dropped|put on hold|on hold|abandoned)\b/, "shelved"],
+  // Before "operational": a partly open line is still being built.
+  [/\bpartially operational\b/, "under_construction"],
   [/\b(operational|opened|inaugurated|commissioned|open to (the )?public|in operation|services? (began|started|commenced))\b/, "operational"],
-  [/\b(under construction|construction (is )?(under ?way|in progress|ongoing|has (begun|started|commenced))|work (is )?(under ?way|in progress|ongoing)|being built)\b/, "under_construction"],
-  [/\b(tender(s|ed)?( (has|have) been)? (invited|floated|awarded|issued|called)|tendered|contract(s)? (has |have )?(been )?awarded|bids? (invited|opened))\b/, "tendered"],
+  [
+    /\b(under construction|construction (is )?(under ?way|in progress|ongoing|has (begun|started|commenced))|construction works? (is |are )?(under ?way|in progress|ongoing)|work (is )?(under ?way|in progress|ongoing)|works? (are|is) in progress|civil works? (has|have) (begun|started)|nearing completion|being built)\b/,
+    "under_construction",
+  ],
+  [/\b(tender(s|ed)?( (has|have) been)? (invited|floated|awarded|issued|called)|tendered|contract(s)? (has |have )?(been )?awarded|bids? (invited|opened)|work order (issued|awarded))\b/, "tendered"],
   [/\b(dpr|detailed project report)( (has|was) been| (has|was|is))? (approved|cleared)\b/, "dpr_approved"],
-  [/\b(approved|sanctioned|cleared|got (the )?(nod|approval)|green ?light(ed)?)\b/, "approved"],
+  [/\b(approved|sanctioned|cleared|got (the )?(nod|approval)|green ?light(ed)?|in[- ]principle approval|cabinet (nod|approval))\b/, "approved"],
   [/\b(proposed|planned|announced|on the anvil|in the pipeline|mooted|envisaged|feasibility)\b/, "proposed"],
 ];
 
@@ -108,9 +114,18 @@ const NEGATION = /\b(not|no|never|nor|yet to|awaiting|pending|without)\b|n't\b|\
 /** Future or expectation: "expected to be operational", "will be opened", "likely to be tendered". */
 const FUTURE = /\b(expected to|likely to|set to|due to|will|shall|would|to be|soon|upcoming|plans? to|scheduled to)\b/;
 
+/**
+ * Words just before a stage phrase that are checked for negation/future markers. Only these and
+ * the phrase itself are checked, so later wording in the same clause ("under construction and
+ * expected to be completed by 2027") does not void a stage that is plainly stated.
+ */
+export const STAGE_PREFIX_WORDS = 4;
+
+const normStage = (text: string) => text.normalize("NFKC").toLowerCase().replace(/[’`]/g, "'").replace(/\s+/g, " ").trim();
+
 /** Negation and future markers in a stage phrase (or in the words just before it on the page). */
 export function stageMarkers(text: string): { negated: boolean; future: boolean } {
-  const t = text.normalize("NFKC").toLowerCase().replace(/[’`]/g, "'").replace(/\s+/g, " ");
+  const t = normStage(text);
   return { negated: NEGATION.test(t), future: FUTURE.test(t) };
 }
 
@@ -119,19 +134,45 @@ export function markersVoidStage(m: { negated: boolean; future: boolean }, stage
   return m.negated || (m.future && stage !== "proposed");
 }
 
+export interface StagePhraseMatch {
+  stage: InfrastructureStage;
+  /** The phrase that states the tier, as it appears in the (normalised) text. */
+  phrase: string;
+  /** Everything in the text before that phrase (normalised). */
+  before: string;
+}
+
+/** The most specific stage phrase in `text` (first match in STAGE_PHRASES order), or null. */
+export function matchStagePhrase(text: string | null | undefined): StagePhraseMatch | null {
+  if (!text) return null;
+  const t = normStage(text);
+  if (!t) return null;
+  for (const [re, stage] of STAGE_PHRASES) {
+    const m = re.exec(t);
+    if (m) return { stage, phrase: m[0], before: t.slice(0, m.index) };
+  }
+  return null;
+}
+
+/**
+ * True when negation or future wording in the phrase itself or in the STAGE_PREFIX_WORDS words
+ * just before it voids `stage` ("not approved", "yet to be approved", "will be operational").
+ */
+export function stagePhraseVoided(before: string, phrase: string, stage: InfrastructureStage): boolean {
+  const prefix = normStage(before).split(" ").filter(Boolean).slice(-STAGE_PREFIX_WORDS).join(" ");
+  return markersVoidStage(stageMarkers(`${prefix} ${phrase}`), stage);
+}
+
 /**
  * The tier a stage phrase states, or null when it states none. A negated phrase ("has not been
  * approved", "DPR yet to be approved") states no tier, and neither does a future one ("expected
  * to be operational by 2027", "will be opened"), except "proposed", which is future intent.
+ * Markers are tested only on the matched phrase and the few words just before it.
  */
 export function stageFromText(text: string | null | undefined): InfrastructureStage | null {
-  if (!text) return null;
-  const t = text.normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
-  if (!t) return null;
-  for (const [re, stage] of STAGE_PHRASES) {
-    if (re.test(t)) return markersVoidStage(stageMarkers(t), stage) ? null : stage;
-  }
-  return null;
+  const m = matchStagePhrase(text);
+  if (!m) return null;
+  return stagePhraseVoided(m.before, m.phrase, m.stage) ? null : m.stage;
 }
 
 // ---------------------------------------------------------------------------

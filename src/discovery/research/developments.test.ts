@@ -128,6 +128,62 @@ describe("development validator (anti-fabrication)", () => {
     });
   });
 
+  it("accepts a plain stage followed by expectation wording in the same clause", () => {
+    const hebbal = getLocality("hebbal")!;
+    const cited = "The SAMPLE Blue Line in Hebbal is under construction and is expected to be completed by December 2027, says SAMPLE Metro Authority";
+    const blue = { name: "SAMPLE Blue Line", category: "metro", localityText: hebbal.name, authority: "SAMPLE Metro Authority", expectedCompletion: "December 2027", sourceUrl: URL_A };
+    for (const stageText of ["under construction", "under construction and is expected to be completed by December 2027"]) {
+      const r = validate([{ ...blue, stageText }], evidence([{ url: URL_A, citedText: cited }]));
+      expect(r.dropped, stageText).toEqual({});
+      expect(r.accepted[0], stageText).toMatchObject({
+        stage: "under_construction",
+        stageText,
+        authority: "SAMPLE Metro Authority",
+        expectedCompletion: "December 2027",
+        localityId: "hebbal",
+      });
+    }
+  });
+
+  it("checks the page words just before the matched phrase, also when the phrase ends a longer stageText", () => {
+    const cited = `SAMPLE Alpha Metro Line serving ${LOC.name} is expected to be operational by 2027. Fictional.`;
+    for (const stageText of ["operational", "is expected to be operational", "expected to be operational by 2027"]) {
+      const r = validate([{ ...good, stageText, expectedCompletion: null, authority: null }], evidence([{ url: URL_A, citedText: cited }]));
+      expect(r.dropped, stageText).toEqual({ stage_not_cited: 1 });
+    }
+    for (const lead of ["not yet", "hasn't been", "is yet to be"]) {
+      const page = `SAMPLE Alpha Metro Line serving ${LOC.name} ${lead} approved; work will start in 2027. Fictional.`;
+      const r = validate([{ ...good, stageText: "approved; work will start in 2027", expectedCompletion: null, authority: null }], evidence([{ url: URL_A, citedText: page }]));
+      expect(r.dropped, lead).toEqual({ stage_not_cited: 1 });
+    }
+    const ok = `SAMPLE Alpha Metro Line serving ${LOC.name} was approved by the state cabinet; work will start in 2027. Fictional.`;
+    const r = validate(
+      [{ ...good, stageText: "approved by the state cabinet; work will start in 2027", expectedCompletion: null, authority: null }],
+      evidence([{ url: URL_A, citedText: ok }]),
+    );
+    expect(r.accepted[0]).toMatchObject({ stage: "approved" });
+  });
+
+  it("accepts the new unambiguous stage phrases from the page", () => {
+    for (const [lead, stageText, stage] of [
+      ["is", "nearing completion", "under_construction"],
+      ["has a", "work order issued", "tendered"],
+      ["has", "in-principle approval", "approved"],
+      ["is", "partially operational", "under_construction"],
+    ] as const) {
+      const cited = `SAMPLE Alpha Metro Line serving ${LOC.name} ${lead} ${stageText}. Fictional.`;
+      const r = validate([{ ...good, stageText, expectedCompletion: null, authority: null }], evidence([{ url: URL_A, citedText: cited }]));
+      expect(r.accepted[0], stageText).toMatchObject({ stage });
+    }
+  });
+
+  it("the prompt asks for the shortest verbatim stage phrase", () => {
+    const p = buildDevelopmentUserPrompt({ localityName: "Hebbal", nearbyNames: [], now: NOW });
+    expect(p).toMatch(/shortest phrase from the page that states its current stage/);
+    expect(p).toMatch(/stageText must be the shortest verbatim phrase/);
+    expect(p).toContain('"DPR approved"');
+  });
+
   it("requires the locality in the development's own citation window, not elsewhere on the page", () => {
     const nameOnly = "SAMPLE Alpha Metro Line is under construction by the SAMPLE Metro Authority. Fictional.";
     const localityElsewhere = `${LOC.name} has many SAMPLE parks. Fictional.`;

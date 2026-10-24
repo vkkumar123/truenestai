@@ -12,9 +12,9 @@ import {
   DEVELOPMENT_RESEARCH_RADIUS_KM,
   isInfraCategory,
   isPromotionalText,
-  markersVoidStage,
+  matchStagePhrase,
   stageFromText,
-  stageMarkers,
+  stagePhraseVoided,
   withinHorizon,
 } from "@/locality/developments";
 import { safeHttpsUrl } from "../adapter";
@@ -66,10 +66,10 @@ export function buildDevelopmentUserPrompt(input: { localityName: string; nearby
     input.nearbyNames.length ? `Nearby localities we also cover: ${input.nearbyNames.map(tagSafe).join(", ")}.` : "",
     "",
     `1. Search the web (at most ${RESEARCH_MAX_SEARCHES} searches) for public infrastructure planned, approved or under construction within about ${DEVELOPMENT_RESEARCH_RADIUS_KM} km of this locality that is expected between ${y} and ${y + DEVELOPMENT_HORIZON_YEARS}, or recently opened.`,
-    `2. For each development (at most ${MAX_DEVELOPMENT_CANDIDATES}), write one short paragraph citing the page that states its name, the locality or area it serves, its stage (for example proposed, approved, DPR approved, tendered, under construction, operational, shelved), the authority responsible and the expected completion date, each exactly as the page writes them. Skip any fact the page does not state.`,
+    `2. For each development (at most ${MAX_DEVELOPMENT_CANDIDATES}), write one short paragraph citing the page that states its name, the locality or area it serves, its stage (for example proposed, approved, DPR approved, tendered, under construction, operational, shelved), the authority responsible and the expected completion date, each exactly as the page writes them. For the stage, quote the shortest phrase from the page that states its current stage (for example "under construction" or "DPR approved"), not the whole sentence. Skip any fact the page does not state.`,
     "3. Finish with one ```json fenced block holding an array. Each item:",
     '{"name": string, "category": "metro"|"suburban_rail"|"rail"|"road"|"flyover"|"ring_road"|"airport"|"zoning"|"water"|"power"|"other", "localityText": string|null, "stageText": string|null, "authority": string|null, "expectedCompletion": string|null, "sourceUrl": string}',
-    "Copy name, localityText, stageText, authority and expectedCompletion verbatim from the page at sourceUrl, which must be the exact URL of the page the facts came from. Use null when the page does not state a value. Output [] if no page you found names a development near this locality.",
+    "Copy name, localityText, stageText, authority and expectedCompletion verbatim from the page at sourceUrl, which must be the exact URL of the page the facts came from. stageText must be the shortest verbatim phrase from the page that states the current stage (for example \"under construction\" or \"DPR approved\"), not the whole sentence. Use null when the page does not state a value. Output [] if no page you found names a development near this locality.",
   ]
     .filter((l) => l !== "")
     .join("\n");
@@ -145,20 +145,21 @@ export function developmentNameKey(name: string): string {
   return name.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 
-/** Words just before a cited stage phrase that are checked for negation/future markers. */
-const STAGE_PREFIX_WORDS = 4;
-
 /**
  * True when at least one cited occurrence of the stage phrase is not negated or future-tense by
  * the few words before it ("has not been approved", "yet to be tendered", "will be operational").
+ * The phrase that states the tier is derived from stageText exactly as stageFromText does, and the
+ * words checked are the STAGE_PREFIX_WORDS page words just before that phrase (which may come from
+ * stageText itself when the phrase sits at the end of a longer stageText).
  */
 export function stageAffirmedInWindows(stageText: string, stage: InfrastructureStage, windows: readonly string[]): boolean {
   const phrase = words(stageText);
+  const m = matchStagePhrase(phrase);
+  if (!m || m.stage !== stage) return false;
   for (const w of windows) {
     const text = words(w);
     for (let at = text.indexOf(phrase); at >= 0; at = text.indexOf(phrase, at + 1)) {
-      const before = text.slice(0, at).trim().split(" ").slice(-STAGE_PREFIX_WORDS).join(" ");
-      if (!markersVoidStage(stageMarkers(`${before} ${phrase}`), stage)) return true;
+      if (!stagePhraseVoided(`${text.slice(0, at)} ${m.before}`, m.phrase, stage)) return true;
     }
   }
   return false;
@@ -246,7 +247,9 @@ export function validateDevelopmentCandidates(
 
     // Stage: the cited phrase decides the tier (constitution §5: no tier, no row). A negated or
     // future phrase ("has not been approved", "will be opened") states no tier, on its own or in
-    // the words just before it on the page.
+    // the words just before it on the page. Only the phrase that states the tier and the
+    // STAGE_PREFIX_WORDS words before it are checked, so "under construction and expected to be
+    // completed by 2027" keeps under_construction.
     const stage = c.stageText && inWindow(c.stageText) ? stageFromText(c.stageText) : null;
     if (!stage || !c.stageText || !stageAffirmedInWindows(c.stageText, stage, wins)) return inc(dropped, "stage_not_cited");
 

@@ -184,3 +184,11 @@ Verdict: **PASS** (N1–N4 fixed; no critical, high or medium findings). Low, no
 - N2: the item is inserted with `on conflict (name_key, source_url) where added_by = 'research' do nothing returning id`. When no row comes back, the existing row is re-selected `for update` and the existing branches run. A DB test with two connections stores the same new item concurrently: both succeed on one row.
 - N3: NEGATION also matches the apostrophe-stripped forms (`isn t`, `hasn t`, `wasn t`, …). Tests cover "isn't approved", "hasn't been approved" and "wasn't sanctioned", both in `stageFromText` and in the cited window.
 - N4: a year followed by a comma is accepted (`/^(\d|,\d)/` rejects only a digit or a thousands group). Tested with "expected by 2027, says BMRCL"; "20301" is still rejected.
+
+## S4a fix — stage phrase markers (2026-10-24), pending review
+Input: branch fix/developments-stage-phrase. Trigger: the first staging run (Hebbal, 2026-10-24) ended `no_results` / `drop_stage_not_cited`; candidates were not logged, so the likely causes are fixed conservatively. Gates: check 559 tests green, e2e area-developments green.
+- Negation/future markers are now tested only on the matched stage phrase plus the `STAGE_PREFIX_WORDS` (4) words before it, in both `stageFromText` and `stageAffirmedInWindows` (shared `matchStagePhrase` / `stagePhraseVoided`). "under construction and expected to be completed by 2027" now gives under_construction. "not approved", "yet to be approved", "isn't approved", "hasn't been approved" and "(is) expected to be / will be operational" still drop.
+- In the cited window, the words checked are the page words just before the matched phrase, even when that phrase sits inside a longer stageText.
+- New phrases: under_construction ("nearing completion", "works are/is in progress", "civil work(s) has/have begun/started", "construction work(s) underway/in progress/ongoing", "partially operational"); tendered ("work order issued/awarded"); approved ("in-principle approval", "cabinet nod/approval"). "Foundation stone" and "trial run(s)" deliberately map to no stage.
+- Prompt: stageText must be the shortest verbatim phrase from the page that states the current stage.
+- Reviewer to confirm: no fabrication path opened; a stage still needs a verbatim cited phrase, not negated or future-tense by the words just before it.

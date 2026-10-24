@@ -10,7 +10,9 @@ import {
   expectedLabel,
   formatStraightLine,
   isInfraStage,
+  STAGE_PREFIX_WORDS,
   isPromotionalText,
+  matchStagePhrase,
   parseDeclaredDate,
   stageFromText,
   stageRank,
@@ -77,8 +79,55 @@ describe("infrastructure stages", () => {
     "wasn't sanctioned",
     "isn’t approved",
     "to be completed soon",
+    "is expected to be operational by 2027",
+    "expected to be operational",
+    "will be operational",
+    "not yet approved",
+    "not approved",
+    "not nearing completion",
+    "work order yet to be issued",
+    "awaiting in-principle approval",
+    "awaiting cabinet nod",
   ])("a negated or future phrase states no tier: %j", (text) => {
     expect(stageFromText(text)).toBeNull();
+  });
+
+  it.each([
+    ["under construction and expected to be completed by 2027", "under_construction"],
+    ["approved by the state cabinet; work will start in 2026", "approved"],
+    ["nearing completion", "under_construction"],
+    ["works are in progress", "under_construction"],
+    ["work is in progress", "under_construction"],
+    ["civil works have begun", "under_construction"],
+    ["civil work has started", "under_construction"],
+    ["construction work underway", "under_construction"],
+    ["construction works are in progress", "under_construction"],
+    ["construction works ongoing", "under_construction"],
+    ["partially operational", "under_construction"],
+    ["work order issued", "tendered"],
+    ["work order awarded", "tendered"],
+    ["in-principle approval", "approved"],
+    ["in principle approval", "approved"],
+    ["cabinet nod", "approved"],
+    ["cabinet approval", "approved"],
+  ] as const)("markers count only just before the phrase; new phrases: stageFromText(%j) = %j", (text, stage) => {
+    expect(stageFromText(text)).toBe(stage);
+  });
+
+  it("does not map foundation stones or trial runs to any stage", () => {
+    expect(stageFromText("foundation stone laid")).toBeNull();
+    expect(stageFromText("trial runs")).toBeNull();
+    expect(stageFromText("trial run conducted")).toBeNull();
+  });
+
+  it("matchStagePhrase returns the phrase that states the tier and the text before it", () => {
+    expect(matchStagePhrase("the line is under construction and expected to be completed by 2027")).toEqual({
+      stage: "under_construction",
+      phrase: "under construction",
+      before: "the line is ",
+    });
+    expect(matchStagePhrase("coming soon")).toBeNull();
+    expect(STAGE_PREFIX_WORDS).toBe(4);
   });
 
   it("future intent still states 'proposed'; negation does not", () => {

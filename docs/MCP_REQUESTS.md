@@ -40,3 +40,33 @@ Status: `open` | `in_progress` | `done` | `declined`. Nothing here has been conf
 - Later: Supabase values and a generated SESSION_SECRET into Secret Manager via `gcloud secrets versions add` (never chat or Git); for production a domain, its DNS A record, the `PRODUCTION_URL` variable and required reviewers on the `production` GitHub environment.
 - Minimum permissions: deployer has `artifactregistry.writer` on one repo, `run.developer` on the TrueNest services only, `actAs` on their runtime SAs, and read on the build-key secret. Runtime SAs read only their own environment's secrets. No JSON keys.
 - CI (`ci.yml`) still runs on fixtures and needs nothing.
+
+## R8 — Playwright MCP (dev-time) — open
+- Purpose: (a) browser tests and visual checks of OUR site in Claude Code; (b) **staff-initiated, single-page K-RERA lookups** where Fury opens one project page and asks Claude to read the visible fields into the import sheet. Not a crawler: no loops over listings, no schedules, no CAPTCHA/login bypass (D16, D20).
+- Setup: `.mcp.json` entry `playwright` (no key). First run downloads Chromium.
+- For K-RERA lookups prefer Claude in Chrome / the desktop browser pane (Fury's own session, he navigates); Playwright MCP is the fallback when that is not available.
+
+## R9 — Brave Search API (research agent v2) — open
+- Purpose: discover/verify queries in spec 14 outside the model's built-in web search; cheaper and loggable.
+- Owner: create a key at https://brave.com/search/api/ (Free plan is enough for staging), then
+  `printf %s "$KEY" | gcloud secrets versions add truenest-staging-brave-api-key --data-file=-` and export `BRAVE_API_KEY` locally for the MCP server. Never in Git.
+- Env: `BRAVE_API_KEY` (server/worker only).
+
+## R10 — Google Maps Platform (geocoding, distance) — open
+- Purpose: project geocoding (spec 06 A), straight-line + 9 AM drive time (spec 06 D, spec 13). Enable Geocoding API and Distance Matrix API on project `truenestai`; restrict the key by API and (for the browser key, later) by referrer.
+- Setup: `gcloud services enable geocoding-backend.googleapis.com distance-matrix-backend.googleapis.com`; create a server key in Console → Credentials; store as `truenest-staging-google-maps-api-key` in Secret Manager; export `GOOGLE_MAPS_API_KEY` locally for the MCP server.
+- Budget: ~2,000 Distance Matrix calls/month at launch; set a billing alert at ₹2,000.
+
+## R11 — Reddit and YouTube Data APIs (community signals) — open
+- Reddit: create a "script" app at https://www.reddit.com/prefs/apps → `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, user agent `truenest/0.1 (by u/<handle>)`.
+- YouTube Data API v3: enable on `truenestai`, key `YOUTUBE_API_KEY` (10k units/day free).
+- Both read-only; store in Secret Manager as above. Needed for P1 (spec 03 adapters).
+
+## R12 — Scrapy crawl worker (Loop 1) — open
+- Purpose: scheduled crawl of sources that permit it (builder pages, BMRCL/BDA/NHAI/KIADB notice pages, news RSS). Python, lives in `workers/crawl/` (ARCHITECTURE.md reserved `workers/` for Python).
+- Mandatory settings: `ROBOTSTXT_OBEY = True`, `AUTOTHROTTLE_ENABLED = True`, `DOWNLOAD_DELAY ≥ 2`, `CONCURRENT_REQUESTS_PER_DOMAIN = 1`, `USER_AGENT = "TrueNestBot/0.1 (+https://<domain>/bot; contact <email>)"`. Every spider checks the source registry (`approved` + env) before its first request and refuses otherwise. K-RERA is excluded unless D16 is revised by the owner.
+- Deploy: Cloud Run Job `truenest-crawl` triggered by Cloud Scheduler; raw payloads to GCS; writes through the extraction step (spec 04).
+
+## R13 — Cloud Tasks (research push trigger) — open
+- Purpose: run a research job seconds after enqueue instead of waiting for the 2-minute sweep (spec 14 §C).
+- Setup: `gcloud services enable cloudtasks.googleapis.com`; queue `truenest-research` in `asia-south1`; runtime SA needs `roles/cloudtasks.enqueuer`; the task POSTs `/api/internal/research/run` with the existing `x-research-secret` header. Fallback without it: in-process `fetch()` fire-and-forget.

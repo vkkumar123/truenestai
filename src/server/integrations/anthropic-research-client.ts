@@ -23,10 +23,11 @@ export const RESEARCH_REQUEST_TIMEOUT_MS = 110_000;
 
 /**
  * Real research client: Claude Messages API with Anthropic's server-side web search tool.
- * - web_search_20260209 (dynamic filtering). Its web_search_tool_result blocks come back as
- *   top-level content blocks (with `caller` set when called from code execution); the validator
- *   checks citations against them, and a response with candidates but no result blocks fails
- *   closed ("no_evidence").
+ * - web_search_20250305 (basic, no dynamic filtering): results go straight into the model's
+ *   context, so its answer cites them with web_search_result_location citations, which is the
+ *   only evidence the validator trusts. (With dynamic filtering, results are filtered by code
+ *   before the model sees them; suspected cause of an empty staging run on 2026-10-24.)
+ *   A response with candidates but no result blocks fails closed ("no_evidence").
  * - max_uses caps searches; listing portals are blocked at the search.
  * - No SDK retries (the job retries at most once); refusals fall back server-side.
  * Never logs the key, prompt or response text.
@@ -63,7 +64,7 @@ export class AnthropicResearchClient implements ResearchClient {
             system: RESEARCH_SYSTEM_PROMPT,
             tools: [
               {
-                type: "web_search_20260209",
+                type: "web_search_20250305",
                 name: "web_search",
                 max_uses: RESEARCH_MAX_SEARCHES,
                 blocked_domains: [...BLOCKED_PORTAL_DOMAINS],

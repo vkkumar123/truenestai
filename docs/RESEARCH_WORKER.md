@@ -37,7 +37,7 @@ Strict rules:
 - **Whole tokens.** A RERA number must equal a whole normalised token, never a fragment of a longer one or two tokens spliced together. A price must have a non-digit, non-dot boundary on both sides, so "45 L" does not match "1.45 L" and "5 Cr" does not match "2.5 Cr".
 - **Stored URL.** The URL stored is the one from the matching `web_search_tool_result`, not the URL the model wrote.
 
-The request does not set `allowed_callers` on `web_search_20260209`: the claude-api skill documents that field only for custom tools. When web search is called from code execution (dynamic filtering), its `web_search_tool_result` blocks still come back at the top level with a `caller` field, and the evidence extractor counts them. If the model returns candidates but the response has no search result blocks, the job fails closed with `no_evidence`.
+The request uses the basic `web_search_20250305` tool (no dynamic filtering), so search results go straight into the model's context and its answer carries `web_search_result_location` citations, the only evidence the validator trusts. With dynamic filtering (`web_search_20260209`) the results are filtered by code first. On staging (2026-10-24) a job ended `no_candidates`; dynamic filtering is the suspected cause (the response itself was not observable), to be confirmed by the refined `no_candidates_*` codes on the next run. If the model returns candidates but the response has no search result blocks, the job fails closed with `no_evidence`.
 
 ## Cost guardrails
 | Guardrail | Value |

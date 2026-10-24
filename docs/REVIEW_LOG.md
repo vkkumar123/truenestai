@@ -119,3 +119,8 @@ Verdict: **PASS**. H1 fixed: in title-only mode RERA and price need the name win
 Low, open/accepted:
 - L1: the developer-name guard relies on the model's developerName; a developer-style title can still pass as an unverified listing without RERA or price. Optional hardening later.
 - L2: fixed — stale comment above the title-only check.
+
+## Research empty-run fix — review (2026-10-24)
+Input: 98ff691 (basic web_search_20250305, prompt tweak, refined no_candidates_* codes); check 411, research e2e 15.
+Verdict: **PASS**. Validator untouched; prompt still forbids guessing; counts-only logs; codes fit the CHECK.
+- L1: fixed — docs/comment now call dynamic filtering the suspected (not confirmed) cause.

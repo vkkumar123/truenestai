@@ -28,6 +28,15 @@ export interface ResearchRunResult {
   stopReason: string | null;
   reviewFlags: number;
   normaliseErrors: number;
+  /** Counts only (no text): what the search returned, to diagnose an empty run. */
+  evidence: EvidenceStats;
+}
+
+export interface EvidenceStats {
+  searchResultBlocks: number;
+  searchErrors: number;
+  resultUrls: number;
+  citations: number;
 }
 
 /** Throws ResearchClientError("source_not_runnable") unless the source may run in `env`. */
@@ -87,5 +96,11 @@ export async function researchQuery(queryText: string, opts: ResearchRunOptions)
     stopReason: res.stopReason,
     reviewFlags: discovery.reviewFlags.length,
     normaliseErrors: discovery.errors.filter((e) => e.sourceId === source.id).length,
+    evidence: {
+      searchResultBlocks: evidence.searchResultBlocks,
+      searchErrors: evidence.searchErrors,
+      resultUrls: evidence.searchResultUrls.length,
+      citations: evidence.citations.length,
+    },
   };
 }

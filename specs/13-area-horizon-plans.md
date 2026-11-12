@@ -3,7 +3,7 @@
 **Owner agents:** locality-intelligence-engineer (`src/locality`, `src/config/markets`),
 backend-data-engineer (migration), frontend-engineer (Potential section), property-discovery-
 engineer (govt/news adapters). Extends spec 06 (developments + proximity) and spec 08 (brief).
-**Needs from Fury:** Google Maps Platform key (Geocoding + Distance Matrix); a yes/no on
+**Needs from Fury:** Google Maps Platform key (Geocoding + Routes API); a yes/no on
 showing drive times (billable); review of the seed list below before it goes live.
 
 ## Goal
